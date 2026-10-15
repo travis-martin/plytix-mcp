@@ -91,3 +91,8 @@ jspm_packages/
 
 # TernJS port file
 .tern-port
+# Private rendered deployment configuration
+.env.*
+!.env.example
+deploy/*.local.yaml
+*.pem
