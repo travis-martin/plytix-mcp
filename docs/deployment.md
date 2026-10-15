@@ -3,6 +3,12 @@
 No Google Cloud resources, credentials, IAM bindings, billing changes or live
 Plytix writes have been created. This is a deployment plan and unrendered template.
 
+For the dated operator snapshot, see [project handoff](project-handoff.md) and
+[current approval bundle](cloud-approval.md). The 2026-10-15 checks verified the
+refreshed work login and existing project; disabled billing is the next blocker.
+The account-independent deployment guidance below still requires fresh metadata
+and exact action-time approvals.
+
 ## Resolve identity first
 
 The inspected Desktop SDK configuration had no selected project. Its authorized
