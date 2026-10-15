@@ -234,6 +234,7 @@ export interface PlytixFilterDefinition {
 // ─────────────────────────────────────────────────────────────
 
 export interface PlytixClientConfig {
+  allowWrites?: boolean;
   apiKey: string;
   apiPassword: string;
   baseUrl?: string;

@@ -6,6 +6,7 @@
  */
 
 import type { PlytixClient } from '../client.js';
+import { PlytixError } from '../types.js';
 import type { PlytixSearchBody, PlytixProduct } from '../types.js';
 import {
   detectIdentifierType,
@@ -387,7 +388,8 @@ export class PlytixLookup {
           this.setCache(cacheKey, lookupResult);
           return lookupResult;
         }
-      } catch {
+      } catch (error) {
+        if (!(error instanceof PlytixError) || (error.status !== 400 && error.status !== 404 && error.status !== 422)) throw error;
         plan.push('direct_id_lookup_failed');
       }
     }
@@ -451,7 +453,8 @@ export class PlytixLookup {
 
         // Early exit on high-confidence match
         if (results.some((m) => m.confidence >= 0.99)) break;
-      } catch {
+      } catch (error) {
+        if (!(error instanceof PlytixError) || (error.status !== 400 && error.status !== 404 && error.status !== 422)) throw error;
         plan.push(`${search.tag}_failed`);
       }
     }
@@ -464,7 +467,8 @@ export class PlytixLookup {
           'text_search_multi'
         );
         matches.push(...textSearchResults);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof PlytixError) || (error.status !== 400 && error.status !== 404 && error.status !== 422)) throw error;
         plan.push('text_search_multi_failed');
       }
     }
@@ -484,7 +488,8 @@ export class PlytixLookup {
 
         const broadResults = await executeSearch({ filters: [broadFilters] }, 'broad_like_search');
         matches.push(...broadResults);
-      } catch {
+      } catch (error) {
+        if (!(error instanceof PlytixError) || (error.status !== 400 && error.status !== 404 && error.status !== 422)) throw error;
         plan.push('broad_like_search_failed');
       }
     }
@@ -581,9 +586,8 @@ export class PlytixLookup {
 
       matches.sort((a, b) => b.confidence - a.confidence);
       return { selected: matches[0], matches, plan };
-    } catch {
-      plan.push('multi_criteria_search_failed');
-      return { matches: [], plan };
+    } catch (error) {
+      throw error;
     }
   }
 }

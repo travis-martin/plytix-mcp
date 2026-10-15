@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import { PlytixLookup, DEFAULT_SEARCH_FIELDS } from '../lookup/lookup.js';
-import { WorkerPlytixLookup } from '../worker-lookup.js';
 import type { PlytixClient } from '../client.js';
-import type { WorkerPlytixClient } from '../worker-client.js';
 
 const originalSearchFieldsEnv = process.env.PLYTIX_SEARCH_FIELDS;
 
@@ -57,9 +55,9 @@ describe('search field sanitization', () => {
     expect(call.attributes).toEqual(['sku', 'attributes.mpn']);
   });
 
-  it('filters non-string search fields in worker config', async () => {
+  it('filters non-string search fields and trims custom field paths', async () => {
     const client = makeClient();
-    const lookup = new WorkerPlytixLookup(client as unknown as WorkerPlytixClient, {
+    const lookup = new PlytixLookup(client as unknown as PlytixClient, {
       searchFields: [123, ' attributes.mpn ', null, 'sku'] as unknown as string[],
     });
 
