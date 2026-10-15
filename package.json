@@ -1,8 +1,8 @@
 {
-  "name": "plytix-mcp-server",
+  "name": "plytix-mcp",
   "version": "0.2.0",
   "type": "module",
-  "description": "MCP server for Plytix PIM API integration. Enables AI assistants to read, write, and manage product data, assets, categories, and relationships.",
+  "description": "Read-only by default MCP tools for Plytix product data, schema, assets and relationships.",
   "keywords": [
     "mcp",
     "plytix",
@@ -10,18 +10,8 @@
     "product-information-management",
     "ai",
     "claude",
-    "model-context-protocol",
-    "cloudflare-workers"
+    "model-context-protocol"
   ],
-  "homepage": "https://github.com/Supplyline/plytix-mcp",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/Supplyline/plytix-mcp.git"
-  },
-  "bugs": {
-    "url": "https://github.com/Supplyline/plytix-mcp/issues"
-  },
-  "author": "Supplyline",
   "license": "MIT",
   "main": "dist/index.js",
   "bin": {
@@ -63,5 +53,6 @@
     "typescript": "^5.6.3",
     "vitest": "^4.0.17",
     "wrangler": "^4.59.2"
-  }
+  },
+  "private": true
 }
