@@ -6,7 +6,7 @@ Verified on 2026-10-15, using fixture data only:
 | --- | --- |
 | `npm ci --ignore-scripts` | Pass on Desktop Node 22.14.0 |
 | `npm run typecheck` and `npm run build` | Pass |
-| `npm test` | 57 tests pass across seven files |
+| `npm test` | 60 tests pass across eight files |
 | `npm audit --audit-level=moderate` | Zero reported advisories in the resolved tree |
 | `docker build -t plytix-mcp:local .` | Pass with Node 24.22.0 |
 | `node scripts/container-smoke.mjs` | Pass with 0.25 CPU and 256 MiB limit |
@@ -34,3 +34,11 @@ Not verified: real Plytix accounts, direct hosted AI clients, production Cloud R
 deployment, Google IAM/secret policy, cloud cold-start behavior or billed cost. Those
 require confirmed project identity and the approvals in [deployment.md](deployment.md).
 Dependency advisories and base images can change; recheck before deployment.
+
+A fresh review of commit 179acdc found SDK cancellation was not propagated into
+stdio operations, and schema discovery lacked a cumulative byte limit. The fixes
+wire operation-scoped AbortSignal handling without disabling the next stdio call,
+and enforce an 8 MiB aggregate response budget. Fixture regressions cover a
+cancelled pending write, cancellation of an in-flight fetch, subsequent operation
+recovery and cumulative response exhaustion. Stateless HTTP cross-request
+cancellation remains a documented transport limitation.

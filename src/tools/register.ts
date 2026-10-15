@@ -27,8 +27,8 @@ export function registerTool<TArgs extends Record<string, unknown>>(
   (server.registerTool as any)(name, {
     ...definition,
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: true },
-  }, async (args: TArgs) => {
-    try { return await clients.get(server)!.runOperation(() => handler(args)); }
+  }, async (args: TArgs, extra: { signal: AbortSignal }) => {
+    try { return await clients.get(server)!.runOperation(() => handler(args), extra.signal); }
     catch { return { content: [{ type: 'text', text: 'Tool execution failed' }], isError: true }; }
   });
 }

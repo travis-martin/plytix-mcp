@@ -44,7 +44,8 @@ installed. Cloud logging must not add header/body capture.
   account-wide quotas or a hard billing cap.
 - Each tool operation: 45 seconds and 512 upstream authentication/API requests.
   Each individual fetch, including response-body consumption, has a 15-second
-  timeout. Upstream JSON is limited to 5 MiB. Disconnects cancel fetches and retain
+  timeout. Upstream JSON is limited to 5 MiB per response and 8 MiB cumulatively
+  per operation, before buffering or schema caching. Disconnects cancel fetches and retain
   the active slot until tool work finishes.
 - Schema discovery: at most five pages of 100 IDs; four detail requests at a time.
   Larger/slow accounts can hit the operation budget and return an error. Narrower
@@ -54,6 +55,20 @@ installed. Cloud logging must not add header/body capture.
 - Reads retry at most once after 401 or 429. Rate-limit retry waits are capped at
   two seconds; longer Retry-After values return a rate-limit failure immediately.
   No automatic network/5xx retries and no automatic mutation retries occur.
+
+Stdio honors the SDK operation cancellation signal: in-flight fetches are aborted
+and a cancelled operation cannot send a later API request. The next operation on
+the shared stdio client can proceed normally.
+
+Stateless HTTP has no cross-request cancellation registry. A cancellation
+notification on another HTTP request is accepted as a notification but cannot
+locate an earlier request's server instance. To stop HTTP work, the client must
+abort the original HTTP connection and that disconnect must reach this process
++(proxies can delay it); closing only the client's pending promise or
+sending a separate cancellation notification does not guarantee cancellation.
+The operation deadline/resource budgets still apply. Keep HTTP writes disabled
+until the chosen client's behavior has been verified; this change does not add
+stateful cancellation routing or advertise transactional cancellation.
 
 Cancellation does not roll back a write already accepted by Plytix. Inspect actual
 state before deciding whether to repeat an ambiguous mutation. This repository

@@ -39,16 +39,27 @@ export class PlytixClient {
   private tokenRequest?: Promise<string>;
   private operationDeadline = Date.now() + 45_000;
   private requestCount = 0;
+  private responseBytes = 0;
   private cancelled = false;
   private readonly controllers = new Set<AbortController>();
   private attributeCacheRequest?: Promise<Map<string, PlytixAttributeDetail>>;
 
   private activeOperation?: Promise<unknown>;
-  runOperation<T>(work: () => Promise<T>): Promise<T> {
+  private operationSignal?: AbortSignal;
+  runOperation<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
+    if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
     this.operationDeadline = Date.now() + 45_000;
     this.requestCount = 0;
-    const pending = Promise.resolve().then(work).finally(() => { this.activeOperation = undefined; });
+    this.responseBytes = 0;
+    this.operationSignal = signal;
+    const abort = () => { for (const controller of this.controllers) controller.abort(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    const pending = Promise.resolve().then(work).finally(() => {
+      signal?.removeEventListener('abort', abort);
+      this.operationSignal = undefined;
+      this.activeOperation = undefined;
+    });
     this.activeOperation = pending;
     return pending;
   }
@@ -62,7 +73,7 @@ export class PlytixClient {
   }
 
   private requestTimeout(): number {
-    if (this.cancelled || Date.now() >= this.operationDeadline) throw new PlytixError('Plytix operation cancelled or exceeded its 45 second budget');
+    if (this.cancelled || this.operationSignal?.aborted || Date.now() >= this.operationDeadline) throw new PlytixError('Plytix operation cancelled or exceeded its 45 second budget');
     if (++this.requestCount > 512) throw new PlytixError('Plytix operation exceeded its 512 request budget');
     return Math.min(this.config.timeoutMs, this.operationDeadline - Date.now());
   }
@@ -106,6 +117,11 @@ export class PlytixClient {
       const { done, value } = await reader.read();
       if (done) break;
       total += value.byteLength;
+      this.responseBytes += value.byteLength;
+      if (this.responseBytes > 8 * 1024 * 1024) {
+        await reader.cancel();
+        throw new PlytixError('Plytix operation exceeds aggregate response size limit');
+      }
       if (total > 5 * 1024 * 1024) {
         await reader.cancel();
         throw new PlytixError('Upstream response exceeds size limit');

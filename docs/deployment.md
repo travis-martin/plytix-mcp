@@ -11,6 +11,14 @@ the correct existing account and verify the exact project ID, project number,
 billing account and region before rendering any template. Do not infer a project
 from a familiar display name, create a replacement, or change another service.
 
+For an expired existing work login, the supported owner-run refresh is
+`gcloud auth login EXISTING_WORK_ACCOUNT --no-activate`. This updates local CLI
+authorization while preserving the active account. It grants no project IAM
+permissions. Do not add Drive scopes, update ADC or create a service-account key.
+If additional consent is requested, stop for owner review. Verify project/billing,
+enabled APIs and selected resource metadata after that refresh; do not access
+secret payloads. See [Google's login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/login).
+
 ## Proposed small configuration
 
 `deploy/cloud-run.template.yaml` proposes a new `plytix-mcp` service with:
@@ -35,6 +43,29 @@ Scale-to-zero reduces idle compute charges; it does not guarantee zero total cos
 Shared billing-account free allowances, build execution, Artifact Registry image
 storage, networking, logs and secret storage/access can still cost money.
 Avoid a VPC connector, database, scheduler, load balancer or minimum-instance pool.
+
+For an illustrative us-central1 workload of 10,000 HTTP requests/month at five
+billed seconds each, the selected CPU/RAM and request count cost about $0.34/month
+before shared free allowances, cold starts, storage, networking and logging.
+This is a usage assumption, not an observed or guaranteed bill.
+
+## Required permission scope
+
+Reuse verified existing permissions before proposing any grants:
+
+| Action | Minimum relevant scope |
+| --- | --- |
+| Deploy/create service | Cloud Run Developer; service creation needs project scope |
+| Use runtime identity | Service Account User on that account only |
+| Push image | Artifact Registry Writer on the selected repository only |
+| Read application-token secret | Runtime account: Secret Accessor on that single secret only |
+| Invoke privately | Caller: Cloud Run Invoker on the MCP service only |
+| Change invocation binding | Service-specific setIamPolicy permission, only for the reviewed diff |
+
+Verify Cloud Run's managed service-agent image-read access. First enabling its
+API can create a managed identity/role and requires explicit approval for that
+change. No new managed identity, API enablement or resource creation is implicit
+in a login refresh. See [deployment permissions](https://docs.cloud.google.com/run/docs/deploying).
 
 ## Exact decisions and approvals needed
 
