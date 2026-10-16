@@ -39,25 +39,30 @@ See [security.md](security.md).
 | Existing local Node 24.22.0 image | Constrained smoke test passes at 0.25 CPU / 256 MiB |
 | Container behavior | Non-root, authenticated SDK handshake, 27 reads, mutation denial; about 41 MiB observed |
 | Work login / selected existing project | Verified using explicit caller selection; active default account preserved |
-| Cloud readiness | Billing disabled; linked account closed; an accessible open account exists but is not selected or linked by this work |
+| Cloud readiness | Approved billing/preparation and restricted keyless CI trust verified; publication enabled, auto-deployment off; image, secret version and service still pending |
 
 Fixture tests needed normal local temporary-file and loopback access after sandbox
 restrictions caused environmental failures. The container smoke test removed its
 test container. The existing image was inspected/tested without an upload; its
 local image ID is not a deployable registry manifest digest.
 
-No real Plytix credential transmission, cloud provisioning, billing/API/IAM changes,
-secret payload access, live product writes or unrelated service/subscription
-changes occurred. No Codex internal database was inspected or edited.
+Cloud mutations were limited to approved billing, API enablement, isolated runtime
+resources and the exact resource-scoped CI trust/bindings. No CI/runtime project
+role, user-managed key or direct CI Secret Accessor was created. No credential value,
+secret payload, live product write or unrelated service/subscription was touched.
+No Codex internal database was inspected or edited.
 
 ## Remaining work
 
-1. Obtain exact billing-only approval from the owner using the private local bundle.
-   Billing restoration affects the entire project; no change is authorized yet.
-2. Re-read blocked repository/secret metadata and selected APIs, identities and
-   service policies. Reuse verified resources before proposing new ones.
-3. Review exact resources, IAM diff, image upload, pinned secret version, private
-   service configuration and deployment separately. Owner handles secret entry.
+1. Billing-only approval was executed and verified. The active default account was
+   preserved. Exact evidence is in the private local bundle.
+2. Approved preparation is complete; secret version and image inventories are
+   empty. Earlier filtered API checks were incomplete: use a bounded full API
+   inventory with local exact-name selection for subsequent verification.
+3. Restricted [CI setup](continuous-deployment.md) is approved/configured, with
+   publication on and deployment off. Review/promotion to main publishes the first
+   image. Owner handles secret entry; final private deployment still needs the
+   actual digest/version/configuration and explicit final approval.
 4. Verify actual Codex/local IAM-proxy setup with approved credentials; hosted
    provider authentication still needs a compatible reviewed integration.
 

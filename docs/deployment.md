@@ -1,13 +1,22 @@
 # Cloud Run readiness
 
-No Google Cloud resources, credentials, IAM bindings, billing changes or live
-Plytix writes have been created. This is a deployment plan and unrendered template.
+The explicitly approved billing linkage and bounded preparation are complete:
+required APIs, an empty private image repository, a keyless runtime identity and
+an empty application-secret container with runtime-only explicit accessor binding.
+No image, secret value or Cloud Run service has been deployed. This remains a
+deployment plan and unrendered template.
 
 For the dated operator snapshot, see [project handoff](project-handoff.md) and
 [current approval bundle](cloud-approval.md). The 2026-10-15 checks verified the
-refreshed work login and existing project; disabled billing is the next blocker.
+refreshed work login, existing project, approved billing linkage and prepared
+resources. Owner secret entry, stable-branch promotion and final deployment remain.
 The account-independent deployment guidance below still requires fresh metadata
 and exact action-time approvals.
+
+See [continuous deployment](continuous-deployment.md) for tested stable-branch
+updates. Approved keyless CI trust and publish-only settings are configured.
+The local image upload is deferred to that pipeline; no service is deployed.
+The [owner finish checklist](owner-checklist.md) records the remaining steps.
 
 ## Resolve identity first
 

@@ -99,3 +99,6 @@ deploy/*.local.yaml
 
 # Private operator handoff, account metadata and approval records
 /.local/
+
+# Ephemeral Google GitHub Actions authentication files
+gha-creds-*.json

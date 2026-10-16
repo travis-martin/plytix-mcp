@@ -1,0 +1,12 @@
+# Template only; do not install/enable until the private service, local IAM proxy
+# and bounded read-only client test have been approved and verified.
+# Owner supplies credential values privately through the client's environment.
+[mcp_servers.plytix]
+url = "http://127.0.0.1:8085/mcp"
+enabled = false
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.plytix.env_http_headers]
+X-MCP-Token = "PLYTIX_MCP_AUTH_TOKEN"
+X-Plytix-API-Key = "PLYTIX_API_KEY"
+X-Plytix-API-Password = "PLYTIX_API_PASSWORD"

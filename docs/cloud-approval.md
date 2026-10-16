@@ -2,30 +2,30 @@
 
 Prepared 2026-10-15. This account-independent checklist grants no authorization.
 Exact operator identities, project and billing identifiers, observed IAM inventory,
-and proposed billing command are kept only in `.local/cloud-approval.md`, excluded
+and approved/pending action records are kept only in `.local/cloud-approval.md`, excluded
 from Git. That private bundle records verified metadata; it must be refreshed
 before action. The original external approval note remains unchanged.
 
 ## Staged decisions
 
-1. **Billing only:** the verified existing project has billing disabled and its
-   linked account is closed. An accessible open account exists. The owner must
-   approve the exact project and intended payer before linking them. Billing
-   applies to all project resources. Linking permission is not yet verified; stop
-   on denial without granting new permissions. No billing action has been run.
-2. **Metadata verification:** re-read billing, selected APIs, regional services and
-   repositories, identities and secret names. A billing/API failure does not prove
-   a resource is absent. Never access secret payloads during preparation.
-3. **API/resource approval:** reuse enabled APIs and suitable resources. Separately
-   approve exact missing API enablements, repository, dedicated runtime identity
-   and application-token secret. Avoid an existing runtime account with Editor.
-   Reuse verified caller/service-agent permissions; no blanket grants.
-4. **Image upload:** approve the reviewed source commit, exact repository and one
-   upload. Build locally to avoid Cloud Build provisioning. Read the registry
-   manifest digest after upload; a local Docker image ID is not that digest.
-5. **Secret and IAM:** the owner privately generates/enters/uploads the independent
-   application token. Approve only runtime Secret Accessor on that single secret,
-   pinned to a numeric version. No keys, OAuth grants or chat/argument secret values.
+1. **Billing complete:** the owner's exact billing-only approval was executed.
+   Read-only verification confirmed the intended account and enabled billing.
+   The active default account was preserved; no other cloud settings changed.
+2. **Metadata verification:** use a bounded full API inventory with exact local
+   selection; earlier multi-value filters were incomplete. Required APIs are now
+   verified enabled. Never access secret payloads during preparation.
+3. **Preparation complete:** the approved private registry, dedicated keyless
+   runtime identity, empty application secret and single secret-scoped runtime
+   accessor binding are verified. No runtime project roles were added.
+4. **Image publication:** the approved local upload is deferred in favor of the
+   [approved CI pipeline](continuous-deployment.md). Restricted keyless trust and
+   publish-only settings are configured; the reviewed workflow push is approved.
+   Main promotion publishes the first image. Verify the registry digest afterward;
+   a local image ID is not that digest. Final initial deployment remains reserved.
+5. **Owner secret entry:** the owner privately generates/enters/uploads the
+   independent application token. Runtime-only explicit Secret Accessor is
+   configured; pin the numeric version afterward. There are currently no versions.
+   No keys, OAuth grants or chat/argument secret values.
 6. **Deployment:** approve the immutable image, full rendered YAML, runtime identity,
    secret version, exact Host settings and actual IAM diff. Keep invocation private.
    A reviewed initial TCP-probed private revision may be needed to resolve the host.
