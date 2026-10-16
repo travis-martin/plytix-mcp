@@ -1,0 +1,87 @@
+# Approved publish-only setup. Automatic updates remain disabled until the
+# initial private service and ongoing image updates receive final approval.
+# Repository variables contain metadata, never application/Plytix credentials.
+name: Cloud Run stable release
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: plytix-mcp-stable
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    strategy:
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: ${{ matrix.node }}
+      - run: npm ci --ignore-scripts
+      - run: npm run test:all
+      - run: npm audit --omit=dev --audit-level=high
+
+  publish:
+    needs: validate
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MCP_PUBLISH_ENABLED == 'true' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      GCP_PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      GCP_REGION: ${{ vars.GCP_REGION }}
+      MCP_IMAGE_REPOSITORY: ${{ vars.MCP_IMAGE_REPOSITORY }}
+      MCP_SERVICE: ${{ vars.MCP_SERVICE }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Build and smoke test locally before cloud authentication
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci --ignore-scripts
+          docker build --tag plytix-mcp:ci .
+          node scripts/container-smoke.mjs plytix-mcp:ci
+      - uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          workload_identity_provider: ${{ vars.MCP_WIF_PROVIDER }}
+          service_account: ${{ vars.MCP_CI_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3
+      - name: Publish the tested image and resolve its immutable digest
+        id: image
+        shell: bash
+        run: |
+          set -euo pipefail
+          : "${GCP_PROJECT_ID:?}" "${GCP_REGION:?}" "${MCP_IMAGE_REPOSITORY:?}"
+          registry="${GCP_REGION}-docker.pkg.dev"
+          image="${registry}/${GCP_PROJECT_ID}/${MCP_IMAGE_REPOSITORY}/plytix-mcp:${GITHUB_SHA}"
+          gcloud auth configure-docker "${registry}" --quiet
+          docker tag plytix-mcp:ci "${image}"
+          docker push "${image}"
+          digest="$(gcloud artifacts docker images describe "${image}" --project="${GCP_PROJECT_ID}" --format='value(image_summary.digest)')"
+          [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]]
+          image_digest="${image%:*}@${digest}"
+          echo "image_digest=${image_digest}" >> "${GITHUB_OUTPUT}"
+          echo "Published ${image_digest}" >> "${GITHUB_STEP_SUMMARY}"
+      - name: Update only the image of the approved existing service
+        if: ${{ vars.MCP_AUTO_DEPLOY_ENABLED == 'true' }}
+        shell: bash
+        env:
+          IMAGE_DIGEST: ${{ steps.image.outputs.image_digest }}
+        run: |
+          set -euo pipefail
+          : "${MCP_SERVICE:?}" "${IMAGE_DIGEST:?}"
+          gcloud run services update "${MCP_SERVICE}" --project="${GCP_PROJECT_ID}" --region="${GCP_REGION}" --image="${IMAGE_DIGEST}" --quiet

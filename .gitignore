@@ -91,3 +91,14 @@ jspm_packages/
 
 # TernJS port file
 .tern-port
+# Private rendered deployment configuration
+.env.*
+!.env.example
+deploy/*.local.yaml
+*.pem
+
+# Private operator handoff, account metadata and approval records
+/.local/
+
+# Ephemeral Google GitHub Actions authentication files
+gha-creds-*.json

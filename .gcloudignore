@@ -1,0 +1,10 @@
+*
+!Dockerfile
+!.dockerignore
+!package.json
+!package-lock.json
+!tsconfig.json
+!LICENSE
+!src/
+!src/**
+src/__tests__/

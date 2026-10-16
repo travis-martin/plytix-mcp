@@ -9,7 +9,7 @@
  * - Helper methods for common operations
  */
 
-import 'dotenv/config';
+import { isReadRequest } from './policy.js';
 import type {
   PlytixAuthToken,
   PlytixAuthResponse,
@@ -36,6 +36,47 @@ const DEFAULT_CONFIG = {
 
 export class PlytixClient {
   private token?: PlytixAuthToken;
+  private tokenRequest?: Promise<string>;
+  private operationDeadline = Date.now() + 45_000;
+  private requestCount = 0;
+  private responseBytes = 0;
+  private cancelled = false;
+  private readonly controllers = new Set<AbortController>();
+  private attributeCacheRequest?: Promise<Map<string, PlytixAttributeDetail>>;
+
+  private activeOperation?: Promise<unknown>;
+  private operationSignal?: AbortSignal;
+  runOperation<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+    if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
+    if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
+    this.operationDeadline = Date.now() + 45_000;
+    this.requestCount = 0;
+    this.responseBytes = 0;
+    this.operationSignal = signal;
+    const abort = () => { for (const controller of this.controllers) controller.abort(); };
+    signal?.addEventListener('abort', abort, { once: true });
+    const pending = Promise.resolve().then(work).finally(() => {
+      signal?.removeEventListener('abort', abort);
+      this.operationSignal = undefined;
+      this.activeOperation = undefined;
+    });
+    this.activeOperation = pending;
+    return pending;
+  }
+  async waitForIdle(): Promise<void> {
+    try { await this.activeOperation; } catch { /* The tool reports its own sanitized failure. */ }
+  }
+
+  cancel(): void {
+    this.cancelled = true;
+    for (const controller of this.controllers) controller.abort();
+  }
+
+  private requestTimeout(): number {
+    if (this.cancelled || this.operationSignal?.aborted || Date.now() >= this.operationDeadline) throw new PlytixError('Plytix operation cancelled or exceeded its 45 second budget');
+    if (++this.requestCount > 512) throw new PlytixError('Plytix operation exceeded its 512 request budget');
+    return Math.min(this.config.timeoutMs, this.operationDeadline - Date.now());
+  }
   private config: Required<PlytixClientConfig>;
   private attributeCache?: { byLabel: Map<string, PlytixAttributeDetail>; expires: number };
 
@@ -46,8 +87,18 @@ export class PlytixClient {
       baseUrl: config?.baseUrl ?? process.env.PLYTIX_API_BASE ?? DEFAULT_CONFIG.baseUrl,
       authUrl: config?.authUrl ?? process.env.PLYTIX_AUTH_URL ?? DEFAULT_CONFIG.authUrl,
       timeoutMs: config?.timeoutMs ?? DEFAULT_CONFIG.timeoutMs,
+      allowWrites: config?.allowWrites ?? false,
     };
 
+    for (const value of [this.config.baseUrl, this.config.authUrl]) {
+      const url = new URL(value);
+      if (url.protocol !== 'https:' || url.username || url.password || url.hash || url.search) {
+        throw new Error('Plytix endpoints must be HTTPS URLs without embedded credentials');
+      }
+    }
+    if (!Number.isFinite(this.config.timeoutMs) || this.config.timeoutMs < 1 || this.config.timeoutMs > 30_000) {
+      throw new Error('Invalid Plytix request timeout');
+    }
     if (!this.config.apiKey || !this.config.apiPassword) {
       throw new Error('Missing PLYTIX_API_KEY or PLYTIX_API_PASSWORD');
     }
@@ -57,155 +108,120 @@ export class PlytixClient {
   // Authentication
   // ─────────────────────────────────────────────────────────────
 
-  private async getToken(): Promise<string> {
-    const now = Date.now();
-
-    // Refresh 60s before expiration for safety
-    if (this.token && now < this.token.exp - 60_000) {
-      return this.token.value;
+  private async readJson(response: Response): Promise<unknown> {
+    const reader = response.body?.getReader();
+    if (!reader) throw new PlytixError('Empty upstream response');
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      this.responseBytes += value.byteLength;
+      if (this.responseBytes > 8 * 1024 * 1024) {
+        await reader.cancel();
+        throw new PlytixError('Plytix operation exceeds aggregate response size limit');
+      }
+      if (total > 5 * 1024 * 1024) {
+        await reader.cancel();
+        throw new PlytixError('Upstream response exceeds size limit');
+      }
+      chunks.push(value);
     }
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+  }
 
+  private async getToken(): Promise<string> {
+    if (this.token && Date.now() < this.token.exp - 60_000) return this.token.value;
+    if (this.tokenRequest) return this.tokenRequest;
+    this.tokenRequest = this.authenticate();
+    try { return await this.tokenRequest; }
+    finally { this.tokenRequest = undefined; }
+  }
+
+  private async authenticate(): Promise<string> {
+    const timeoutMs = this.requestTimeout();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
-
+    this.controllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetch(this.config.authUrl, {
-        method: 'POST',
+        method: 'POST', redirect: 'error',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          api_key: this.config.apiKey,
-          api_password: this.config.apiPassword,
-        }),
+        body: JSON.stringify({ api_key: this.config.apiKey, api_password: this.config.apiPassword }),
         signal: controller.signal,
       });
-
-      clearTimeout(timeout);
-
       if (!response.ok) {
-        const body = await response.text();
-        throw new PlytixError(
-          `Authentication failed: ${response.status} - ${body}`,
-          response.status,
-          body
-        );
+        await response.body?.cancel();
+        throw new PlytixError(`Plytix authentication failed (HTTP ${response.status})`, response.status);
       }
-
-      const result = (await response.json()) as PlytixResult<PlytixAuthResponse>;
-      const tokenData = result.data?.[0];
-
-      if (!tokenData?.access_token) {
-        throw new PlytixError('Invalid auth response: missing access_token', undefined, result);
-      }
-
-      // Default to 15 minutes if expires_in not provided
-      const expiresIn = (tokenData.expires_in ?? 900) * 1000;
-      this.token = {
-        value: tokenData.access_token,
-        exp: now + expiresIn,
-      };
-
+      const result = await this.readJson(response) as PlytixResult<PlytixAuthResponse>;
+      const data = result.data?.[0];
+      if (!data?.access_token || typeof data.access_token !== 'string') throw new PlytixError('Invalid authentication response');
+      const ttl = Number(data.expires_in ?? 900);
+      if (!Number.isFinite(ttl) || ttl <= 0) throw new PlytixError('Invalid authentication expiry');
+      this.token = { value: data.access_token, exp: Date.now() + Math.min(ttl, 900) * 1000 };
       return this.token.value;
     } catch (error) {
-      clearTimeout(timeout);
       if (error instanceof PlytixError) throw error;
-      throw new PlytixError(`Auth request failed: ${error}`, undefined, error);
+      throw new PlytixError('Plytix authentication failed');
+    } finally { clearTimeout(timeout); this.controllers.delete(controller); }
+  }
+
+  private retryDelay(headers: Headers): number | undefined {
+    const raw = headers.get('retry-after');
+    let delay = 1000;
+    if (raw !== null) {
+      delay = /^\d+(\.\d+)?$/.test(raw) ? Number(raw) * 1000 : Date.parse(raw) - Date.now();
+    } else if (headers.has('x-ratelimit-reset')) {
+      delay = Number(headers.get('x-ratelimit-reset')) * 1000 - Date.now();
     }
+    if (!Number.isFinite(delay) || delay > 2000) return undefined;
+    return Math.max(100, delay);
   }
-
-  // ─────────────────────────────────────────────────────────────
-  // Rate Limiting
-  // ─────────────────────────────────────────────────────────────
-
-  private parseRateLimitHeaders(headers: Headers): RateLimitInfo | undefined {
-    const limit = headers.get('x-ratelimit-limit');
-    const remaining = headers.get('x-ratelimit-remaining');
-    const reset = headers.get('x-ratelimit-reset');
-
-    if (limit && remaining && reset) {
-      return {
-        limit: parseInt(limit, 10),
-        remaining: parseInt(remaining, 10),
-        reset: parseInt(reset, 10),
-      };
-    }
-    return undefined;
-  }
-
-  private async backoffOnRateLimit(rateLimitInfo?: RateLimitInfo): Promise<void> {
-    if (!rateLimitInfo || rateLimitInfo.remaining > 0) return;
-
-    const now = Date.now();
-    const resetTime = rateLimitInfo.reset * 1000; // Convert to milliseconds
-    const delay = Math.max(1000, resetTime - now + 100); // Add small buffer
-
-    await new Promise((resolve) => setTimeout(resolve, delay));
-  }
-
-  // ─────────────────────────────────────────────────────────────
-  // Core Request Method
-  // ─────────────────────────────────────────────────────────────
 
   private async request<T = unknown>(
-    endpoint: string,
-    options: RequestInit = {},
-    retries = 1
+    endpoint: string, options: RequestInit = {}, retries = 1,
   ): Promise<PlytixResult<T>> {
+    const method = (options.method ?? 'GET').toUpperCase();
+    if (!/^\/api\/v[12]\//.test(endpoint) || /[?#\\]/.test(endpoint) || /\/(?:\.|%2e){1,2}(?:\/|$)/i.test(endpoint)) {
+      throw new PlytixError('Invalid API path');
+    }
+    const readOnly = isReadRequest(endpoint, method);
+    if (!readOnly && !this.config.allowWrites) throw new PlytixError('Writes are disabled');
     const token = await this.getToken();
-
+    const timeoutMs = this.requestTimeout();
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), this.config.timeoutMs);
-
-    // Ensure no trailing slash (causes redirect that drops Authorization header)
-    const url = `${this.config.baseUrl}${endpoint}`.replace(/\/+$/, '');
-
+    this.controllers.add(controller);
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    const url = `${this.config.baseUrl.replace(/\/+$/, '')}${endpoint}`.replace(/\/+$/, '');
     try {
       const response = await fetch(url, {
-        ...options,
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-          ...options.headers,
-        },
+        ...options, method, redirect: 'error',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         signal: controller.signal,
       });
-
-      clearTimeout(timeout);
-
-      const rateLimitInfo = this.parseRateLimitHeaders(response.headers);
-
-      // Rate limited - backoff and retry
-      if (response.status === 429 && retries > 0) {
-        await this.backoffOnRateLimit(rateLimitInfo);
-        return this.request(endpoint, options, retries - 1);
+      // Only reads can be retried. A failed/ambiguous write requires user inspection.
+      if (readOnly && retries > 0 && (response.status === 401 || response.status === 429)) {
+        const delay = response.status === 429 ? this.retryDelay(response.headers) : 0;
+        if (delay !== undefined) {
+          await response.body?.cancel();
+          clearTimeout(timeout);
+          if (response.status === 401) this.token = undefined;
+          if (delay) await new Promise(resolve => setTimeout(resolve, delay));
+          return this.request<T>(endpoint, options, retries - 1);
+        }
       }
-
-      // Token expired - clear and retry
-      if (response.status === 401 && retries > 0) {
-        this.token = undefined;
-        return this.request(endpoint, options, retries - 1);
-      }
-
-      // Handle 204 No Content
-      if (response.status === 204) {
-        return { data: [] } as PlytixResult<T>;
-      }
-
+      if (response.status === 204) return { data: [] } as PlytixResult<T>;
       if (!response.ok) {
-        const body = await response.text();
-        throw new PlytixError(
-          `Request failed: ${response.status} - ${body}`,
-          response.status,
-          body,
-          rateLimitInfo
-        );
+        await response.body?.cancel();
+        throw new PlytixError(`Plytix request failed (HTTP ${response.status})`, response.status);
       }
-
-      return (await response.json()) as PlytixResult<T>;
+      return await this.readJson(response) as PlytixResult<T>;
     } catch (error) {
-      clearTimeout(timeout);
       if (error instanceof PlytixError) throw error;
-      throw new PlytixError(`Request failed: ${error}`, undefined, error);
-    }
+      throw new PlytixError('Plytix request failed or timed out');
+    } finally { clearTimeout(timeout); this.controllers.delete(controller); }
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -328,33 +344,17 @@ export class PlytixClient {
    * Get all product attributes organized by type
    */
   async getProductAttributes(): Promise<{ system: string[]; custom: PlytixFilterDefinition[] }> {
-    try {
-      const filtersResult = await this.getAvailableFilters();
-
-      const system: string[] = [];
-      const custom: PlytixFilterDefinition[] = [];
-
-      if (filtersResult.data) {
-        for (const filter of filtersResult.data) {
-          const field = filter.key ?? filter.field;
-          if (field) {
-            if (field.startsWith('attributes.')) {
-              custom.push(filter);
-            } else {
-              system.push(field);
-            }
-          }
-        }
+    const filtersResult = await this.getAvailableFilters();
+    const system: string[] = [];
+    const custom: PlytixFilterDefinition[] = [];
+    for (const filter of filtersResult.data ?? []) {
+      const field = filter.key ?? filter.field;
+      if (field) {
+        if (field.startsWith('attributes.')) custom.push(filter);
+        else system.push(field);
       }
-
-      return { system, custom };
-    } catch {
-      // Fallback to known system attributes
-      return {
-        system: ['id', 'sku', 'label', 'gtin', 'created', 'modified', 'status'],
-        custom: [],
-      };
     }
+    return { system, custom };
   }
 
   /**
@@ -363,9 +363,10 @@ export class PlytixClient {
    */
   async searchAttributeIds(pageSize = 100): Promise<string[]> {
     const attrIds: string[] = [];
+    if (!Number.isInteger(pageSize) || pageSize < 1 || pageSize > 100) throw new PlytixError('Invalid attribute page size');
     let page = 1;
 
-    while (true) {
+    while (page <= 5) {
       const result = await this.request<{ id: string; filter_type?: string }>(
         '/api/v1/attributes/product/search',
         {
@@ -379,6 +380,7 @@ export class PlytixClient {
       if (!result.data || result.data.length === 0) break;
       attrIds.push(...result.data.map((a) => a.id));
       if (result.data.length < pageSize) break;
+      if (page === 5) throw new PlytixError('Attribute discovery exceeds the five-page limit');
       page++;
     }
 
@@ -409,18 +411,24 @@ export class PlytixClient {
       return this.attributeCache.byLabel;
     }
 
-    // Fetch all attribute IDs, then details in parallel (graceful partial failure)
-    const attrIds = await this.searchAttributeIds();
-    const results = await Promise.allSettled(attrIds.map((id) => this.getAttributeById(id)));
+    if (this.attributeCacheRequest) return this.attributeCacheRequest;
+    this.attributeCacheRequest = this.fetchAttributeCache();
+    try { return await this.attributeCacheRequest; }
+    finally { this.attributeCacheRequest = undefined; }
+  }
 
+  private async fetchAttributeCache(): Promise<Map<string, PlytixAttributeDetail>> {
+    const attrIds = await this.searchAttributeIds();
     const byLabel = new Map<string, PlytixAttributeDetail>();
-    for (const result of results) {
-      if (result.status === 'fulfilled' && result.value?.label) {
-        byLabel.set(result.value.label, result.value);
+    // Bound fan-out; fail discovery rather than caching incomplete/unauthorized schema.
+    for (let i = 0; i < attrIds.length; i += 4) {
+      const results = await Promise.allSettled(attrIds.slice(i, i + 4).map(id => this.getAttributeById(id)));
+      for (const result of results) {
+        if (result.status === 'rejected') throw result.reason;
+        if (result.value?.label) byLabel.set(result.value.label, result.value);
       }
     }
-
-    this.attributeCache = { byLabel, expires: now + CACHE_TTL_MS };
+    this.attributeCache = { byLabel, expires: Date.now() + 5 * 60 * 1000 };
     return byLabel;
   }
 

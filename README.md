@@ -1,314 +1,97 @@
-# Plytix MCP Server
+# Plytix MCP
 
-A **lightweight, stateless Model Context Protocol (MCP) server** that provides AI assistants with live access to Plytix PIM (Product Information Management) data. This server enables AI tools like Claude Desktop, Claude mobile app, and other MCP clients to search, look up, and retrieve product information directly from the Plytix API.
+MCP tools for interactive Plytix product QA, schema discovery, assets, families,
+variants and relationships. Complements existing synchronization systems.
 
-> **Note:** This is a stateless live API tool for read and write operations. For sync, caching, or ETL workflows, see [supplyline-sync](https://github.com/Supplyline/supplyline-sync).
+Node/TypeScript provides one shared implementation for stdio and stateless
+Streamable HTTP. Read tools are enabled by default. Mutation tools are hidden and
+the API client rejects writes until explicitly enabled.
 
-## Features
+## Local development
 
-- **47 MCP tools via stdio and 44 via the remote worker**
-- **Smart product lookup** with automatic identifier detection (SKU, MPN, GTIN, label)
-- **Family & inheritance tracking** with overwritten_attributes support
-- **Schema discovery** for attributes and search filters
-- **Automatic authentication** with token refresh
-- **Rate limit handling** with exponential backoff
-- **Zero persistence** — stateless, no database required
-- **Remote server support** — Deploy to Cloudflare Workers for mobile/web access
+Use Node 24 LTS (Node 22 is also tested).
 
-## Installation
-
-### Prerequisites
-
-- **Node.js 18+** (Node 20+ recommended)
-- **Plytix PIM account** with API access
-
-### Setup
-
-1. **Clone and install:**
-```bash
-git clone https://github.com/Supplyline/plytix-mcp.git
-cd plytix-mcp
-npm install
+```powershell
+npm ci --ignore-scripts
+npm run test:all
 ```
 
-2. **Configure credentials:**
-```bash
-cp .env.example .env
-# Edit .env with your Plytix API credentials
-```
+The checks use fixtures and local processes/listeners. They do not need a Plytix
+account or make live Plytix requests. Build before running `npm test` directly:
+the stdio smoke test launches the built entry point.
 
-3. **Build the project:**
-```bash
+For authorized local read-only use, copy `.env.example` to `.env` and enter your
+existing approved credentials locally. Do not paste them in chat or arguments.
+
+```powershell
 npm run build
+npm run start:stdio
+# Or loopback HTTP on 127.0.0.1:8080:
+npm start
 ```
 
-## Usage
+For stdio, configure an MCP client with `node` and the absolute path to
+`dist/index.js`; provide `PLYTIX_API_KEY` and `PLYTIX_API_PASSWORD` through its
+private environment configuration. HTTP uses `/mcp` and requires
+`X-Plytix-API-Key` and `X-Plytix-API-Password` on every request. HTTP never falls
+back to server-held Plytix credentials. `GET /health` checks the listener only.
 
-### With Claude Desktop
-
-Add to your Claude Desktop MCP configuration (`~/Library/Application Support/Claude/claude_desktop_config.json` on macOS):
-
-```json
-{
-  "mcpServers": {
-    "plytix": {
-      "command": "node",
-      "args": ["/path/to/plytix-mcp/dist/index.js"],
-      "env": {
-        "PLYTIX_API_KEY": "your_api_key_here",
-        "PLYTIX_API_PASSWORD": "your_api_password_here"
-      }
-    }
-  }
-}
-```
-
-### Standalone
-
-```bash
-npm start          # Production mode
-npm run dev        # Development with hot reload
-```
-
-## Remote Server (Cloudflare Workers)
-
-Deploy as a remote MCP server for access from Claude mobile app, web clients, or shared team access.
-
-### Quick Deploy
-
-```bash
-# Install dependencies (includes wrangler)
-npm install
-
-# Login to Cloudflare
-wrangler login
-
-# Deploy to Cloudflare Workers
-npm run deploy
-```
-
-### Using the Remote Server
-
-Once deployed, connect from any MCP client using the deployed URL and your Plytix credentials:
-
-```bash
-# With Claude Desktop (using mcp-remote)
-npx mcp-remote https://plytix-mcp.your-subdomain.workers.dev/mcp \
-  --header "X-Plytix-API-Key: YOUR_API_KEY" \
-  --header "X-Plytix-API-Password: YOUR_API_PASSWORD"
-```
-
-The remote worker exposes 44 tools. It intentionally omits the three local-only identifier utilities: `identifier_detect`, `identifier_normalize`, and `match_score`.
-
-### Local Development
-
-```bash
-npm run dev:worker         # Start local worker at localhost:8787
-npm run test:worker        # Test the worker endpoints
-```
-
-For detailed setup instructions, see [docs/remote-setup.md](docs/remote-setup.md).
-
-## Available Tools
-
-### Product Tools
-
-| Tool | Description |
-|------|-------------|
-| `products_lookup` | Smart lookup by any identifier (auto-detects ID, SKU, MPN, GTIN, label) |
-| `products_get` | Get single product by ID with full details and `overwritten_attributes` |
-| `products_get_full` | Get one product with related family, variants, categories, and assets |
-| `products_search` | Advanced search with filters, pagination, and sorting |
-| `products_find` | Simple multi-criteria search (SKU, MPN, MNO, GTIN, label, fuzzy) |
-| `products_create` | Create a new product |
-| `products_update` | Partial update to product fields/attributes |
-| `products_assign_family` | Assign or unassign a product family |
-| `products_set_attribute` | Atomic set of one attribute value |
-| `products_clear_attribute` | Atomic clear of one attribute value |
-
-### Family Tools
-
-| Tool | Description |
-|------|-------------|
-| `families_list` | List or search product families |
-| `families_get` | Get single family with linked attributes |
-| `families_create` | Create a new product family |
-| `families_link_attribute` | Link one or more attributes to a family |
-| `families_unlink_attribute` | Unlink one or more attributes from a family |
-| `families_list_attributes` | List attributes directly linked to a family |
-| `families_list_all_attributes` | List direct and inherited family attributes |
-
-### Attribute & Filter Tools
-
-| Tool | Description |
-|------|-------------|
-| `attributes_list` | List all attributes (system + custom) with types and options |
-| `attributes_get` | Get full metadata for one attribute label |
-| `attributes_get_options` | Get allowed values for a selectable attribute |
-| `attributes_filters` | Deprecated alias for product filter discovery |
-| `products_filters` | Get product search filter metadata |
-| `assets_filters` | Get asset search filter metadata |
-| `relationships_filters` | Get relationship search filter metadata |
-
-### Asset Tools
-
-| Tool | Description |
-|------|-------------|
-| `assets_get` | Get one asset by ID |
-| `assets_search` | Search account assets |
-| `assets_update` | Update asset metadata (`filename`, `categories`) |
-| `assets_list` | List assets (images, videos, documents) linked to a product |
-| `assets_link` | Link an asset to a product |
-| `assets_unlink` | Unlink an asset from a product |
-
-### Category Tools
-
-| Tool | Description |
-|------|-------------|
-| `categories_search` | Search existing categories |
-| `categories_list` | List categories associated with a product |
-| `categories_link` | Link a category to a product |
-| `categories_unlink` | Unlink a category from a product |
-
-### Variant Tools
-
-| Tool | Description |
-|------|-------------|
-| `variants_create` | Create a variant under a parent product |
-| `variants_link` | Link an existing product as a variant |
-| `variants_unlink` | Unlink a variant from its parent without deleting it |
-| `variants_list` | List variants for a product |
-| `variants_resync` | Reset variant attributes to inherit parent values |
-
-### Relationship Tools
-
-| Tool | Description |
-|------|-------------|
-| `relationships_get` | Get a relationship definition by ID |
-| `relationships_search` | Search relationship definitions |
-| `relationships_link_product` | Link one related product row in a relationship |
-| `relationships_unlink_product` | Unlink one related product row in a relationship |
-| `relationships_set_quantity` | Update quantity for one related product row |
-
-### Identifier Utilities (Stdio Only)
-
-| Tool | Description |
-|------|-------------|
-| `identifier_detect` | Detect identifier type from raw value |
-| `identifier_normalize` | Normalize identifier for matching |
-| `match_score` | Score identifier-product match confidence |
-
-The remote worker exposes every tool above except the three identifier utilities in the final section.
-
-## Smart Lookup System
-
-The `products_lookup` tool automatically detects identifier types and uses staged search strategies:
-
-**Detection priority:**
-1. MongoDB ObjectId (24-char hex) → `id` (confidence: 1.0)
-2. GTIN (8/12/13/14 digits) → `gtin` (confidence: 0.95)
-3. Contains spaces → `label` (confidence: 0.9)
-4. Dashed alphanumeric → `mpn` (confidence: 0.8)
-5. Alphanumeric with separators → `sku` (confidence: 0.7)
-
-**Search strategies (in order):**
-1. Direct ID lookup (if detected as ID)
-2. Exact field matches (SKU, GTIN, MPN, MNO)
-3. Text search across multiple fields
-4. Broad LIKE search (last resort)
-
-**Example:**
-```
-Input: "LMI-PD-123"
-→ Detected as: sku (confidence: 0.7)
-→ Tries: sku_eq, mpn fields, text_search, broad_like
-→ Returns: best match with confidence score
-```
-
-## Inheritance Tracking
-
-Products return an `overwritten_attributes` array listing which attributes are explicitly set (not inherited from family). Use this with:
-
-- `product_family_id` — The family this product belongs to
-- `families_get` — Retrieve family-level default values
-- Compare to determine inherited vs overwritten values
+The official SDK client is tested over both transports. Actual Codex and hosted
+AI-client setup remains to be verified with approved credentials; no client
+connection or OAuth grant has been configured by this change.
 
 ## Configuration
 
-### Environment Variables
+| Variable | Default / purpose |
+| --- | --- |
+| `PLYTIX_API_KEY`, `PLYTIX_API_PASSWORD` | Required by stdio; HTTP uses request headers |
+| `PLYTIX_WRITE_TOOLS` | JSON array, default `[]`; exact mutation tool names only |
+| `HOST`, `PORT` | Local `127.0.0.1:8080`; Cloud Run/container `0.0.0.0:$PORT` |
+| `MCP_AUTH_TOKEN` | Independent service secret; at least 32 characters, required for remote HTTP or any HTTP writes |
+| `MCP_ALLOWED_HOSTS` | Exact comma-separated hostnames without ports; defaults to loopback names |
+| `MCP_ALLOWED_ORIGINS` | Exact comma-separated browser origins; defaults to none |
+| `PLYTIX_API_BASE`, `PLYTIX_AUTH_URL` | Operator-only HTTPS overrides; official Plytix endpoints by default |
+| `PLYTIX_SEARCH_FIELDS` | JSON array; defaults to `sku`, `label`, `gtin` |
+| `PLYTIX_MPN_LABELS`, `PLYTIX_MNO_LABELS` | JSON arrays for account-specific attribute labels |
 
-| Variable | Required | Default | Description |
-|----------|----------|---------|-------------|
-| `PLYTIX_API_KEY` | ✅ | — | Your Plytix API key |
-| `PLYTIX_API_PASSWORD` | ✅ | — | Your Plytix API password |
-| `PLYTIX_API_BASE` | ❌ | `https://pim.plytix.com` | Plytix API base URL |
-| `PLYTIX_AUTH_URL` | ❌ | `https://auth.plytix.com/auth/api/get-token` | Auth endpoint |
-| `PLYTIX_MPN_LABELS` | ❌ | `["attributes.mpn"]` | JSON array of MPN attribute labels |
-| `PLYTIX_MNO_LABELS` | ❌ | `["attributes.model_no"]` | JSON array of MNO attribute labels |
+Remote requests supply the independent secret in `X-MCP-Token`. Raw Plytix
+credentials in `Authorization: Bearer key:password` are not accepted.
+`Authorization` remains available for Cloud Run IAM/OIDC authentication.
+Local loopback reads may omit the service token. Origins, when present, must be
+explicitly allowed even on loopback. Host checks ignore forwarded host headers.
 
-## Development
+Writes require an explicit reviewed allowlist such as
+`["products_update"]`; this is configuration syntax, not approval to enable it.
+See [security and limitations](docs/security.md) before enabling any mutation.
 
-### Scripts
+## Container and Cloud Run
 
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Development server with hot reload (stdio) |
-| `npm run dev:worker` | Development server for Cloudflare Workers |
-| `npm run build` | Build TypeScript to JavaScript |
-| `npm run deploy` | Deploy to Cloudflare Workers |
-| `npm start` | Start production server (stdio) |
-| `npm test` | Run unit tests (vitest) |
-| `npm run test:watch` | Run tests in watch mode |
-| `npm run test:mcp` | Test MCP protocol handshake |
-| `npm run test:worker` | Test worker endpoints |
-| `npm run test:all` | Build + unit + integration + MCP tests |
-| `npm run typecheck` | Type check without building |
-
-### Architecture
-
-```
-src/
-  index.ts              # MCP server entry point (stdio transport)
-  worker.ts             # Cloudflare Worker entry point (HTTP transport)
-  client.ts             # Plytix API client with auth & rate limiting
-  worker-client.ts      # Worker-compatible client (BYOK credentials)
-  worker-lookup.ts      # Worker-compatible smart lookup
-  types.ts              # TypeScript types
-  lookup/
-    identifier.ts       # Identifier type detection
-    lookup.ts           # Smart lookup with staged search
-  tools/
-    products.ts         # Product tools (lookup, get, search, find, write ops)
-    families.ts         # Family tools (list, get, create, attribute membership)
-    attributes.ts       # Attribute metadata + filter discovery tools
-    product-attributes.ts # Atomic product attribute write tools
-    assets.ts           # Asset get/search/update + product asset link tools
-    categories.ts       # Category search + product category link tools
-    variants.ts         # Variant lifecycle tools
-    relationships.ts    # Relationship discovery + product relationship write tools
-  supplyline/           # Supplyline-specific customizations
-wrangler.toml           # Cloudflare Workers configuration
-docs/
-  remote-setup.md       # Remote server setup guide
+```powershell
+docker build -t plytix-mcp:local .
 ```
 
-### Design Principles
+The image runs as the non-root `node` user. Starting a remote/container listener
+without a separately supplied service token fails closed. No credentials are
+baked into the image. See [deployment readiness](docs/deployment.md) and the
+[unrendered manifest](deploy/cloud-run.template.yaml) for approvals, cost choices
+and private-client compatibility. Nothing deploys automatically.
 
-This MCP server is intentionally **stateless and lightweight**:
+Run `node scripts/container-smoke.mjs` after building to repeat the fixture-only
+resource and protocol check. See [validation evidence](docs/validation.md).
 
-- **No database** — All queries go directly to Plytix API
-- **No sync/caching layer** — Fresh data on every request
-- **No background jobs** — Request/response only
-- **Ephemeral in-memory cache** — Brief (60s) request deduplication, cleared on restart
+## Migration
 
-For ETL, sync, or persistent caching needs, use a separate tool like [supplyline-sync](https://github.com/Supplyline/supplyline-sync).
+The Cloudflare entry point, request caches, deployment configuration, duplicate
+client/lookup implementation and credential-dependent live test scripts were
+removed. The SDK exposes all 44 former Worker tool names when all writes are
+explicitly enabled, plus three local identifier primitives. API endpoint and
+payload helpers remain shared with stdio. Default visibility deliberately changes
+to read-only. SDK validation now applies equally to HTTP and stdio.
+
+No legacy SSE endpoint, durable session, database, background worker or
+organization-specific extension is included. Historical API notes are retained in
+`docs/solutions/api-quirks/`; they are snapshots, not a current live verification.
 
 ## License
 
-MIT License — see [LICENSE](LICENSE) file for details.
-
-## Support
-
-- **Issues**: [GitHub Issues](https://github.com/Supplyline/plytix-mcp/issues)
-- **Plytix API**: [Plytix Documentation](https://docs.plytix.com/)
-- **MCP Protocol**: [Model Context Protocol](https://modelcontextprotocol.io/)
+MIT. The original copyright and permission notice are preserved in [LICENSE](LICENSE).

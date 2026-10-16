@@ -1,0 +1,43 @@
+# Review and render all placeholders only after exact deployment/IAM/secret approval.
+# This file creates no resources by itself. Never apply it to an unrelated service.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: plytix-mcp
+  namespace: REPLACE_PROJECT_NUMBER
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/invoker-iam-disabled: 'false'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '0'
+        autoscaling.knative.dev/maxScale: '1'
+        run.googleapis.com/execution-environment: gen1
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'false'
+    spec:
+      serviceAccountName: REPLACE_APPROVED_RUNTIME_SERVICE_ACCOUNT
+      containerConcurrency: 1
+      timeoutSeconds: 60
+      containers:
+        - image: REPLACE_APPROVED_IMAGE_AT_SHA256_DIGEST
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: '0.25'
+              memory: 256Mi
+          env:
+            - name: MCP_ALLOWED_HOSTS
+              value: REPLACE_EXACT_SERVICE_HOSTNAME
+            - name: MCP_ALLOWED_ORIGINS
+              value: ''
+            - name: PLYTIX_WRITE_TOOLS
+              value: '[]'
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: REPLACE_APPROVED_AUTH_SECRET_NAME
+                  key: REPLACE_PINNED_NUMERIC_VERSION

@@ -1,39 +1,34 @@
-/**
- * Tool Registration Wrapper
- *
- * Wraps MCP SDK's registerTool to prevent TS2589 "Type instantiation is excessively deep"
- * errors caused by Zod schema inference flowing into SDK generics.
- *
- * The SDK's type system tries to infer the full schema type recursively, which can
- * cause TypeScript to give up. This wrapper erases the complex inference while
- * preserving runtime behavior.
- */
-
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZodRawShape } from 'zod';
+import { READ_TOOLS, WRITE_TOOLS } from '../policy.js';
+import type { PlytixClient } from '../client.js';
 
 export interface ToolDefinition {
   title?: string;
   description: string;
   inputSchema: ZodRawShape;
 }
+const policies = new WeakMap<McpServer, ReadonlySet<string>>();
+const clients = new WeakMap<McpServer, PlytixClient>();
+export function configureToolPolicy(server: McpServer, writes: ReadonlySet<string>, client: PlytixClient) {
+  for (const name of writes) if (!WRITE_TOOLS.has(name)) throw new Error('Unknown write tool');
+  policies.set(server, new Set(writes));
+  clients.set(server, client);
+}
 
-/**
- * Register a tool with type erasure to prevent deep inference.
- *
- * Usage:
- *   registerTool(server, 'my_tool', {
- *     description: '...',
- *     inputSchema: { foo: z.string() }
- *   }, async ({ foo }) => { ... });
- */
 export function registerTool<TArgs extends Record<string, unknown>>(
-  server: McpServer,
-  name: string,
-  definition: ToolDefinition,
-  handler: (args: TArgs) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>
+  server: McpServer, name: string, definition: ToolDefinition,
+  handler: (args: TArgs) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>,
 ): void {
-  // Cast to any to prevent SDK from inferring the full Zod schema type tree
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (server.registerTool as any)(name, definition, handler);
+  const readOnly = READ_TOOLS.has(name);
+  if (!readOnly && !WRITE_TOOLS.has(name)) throw new Error(`Unclassified tool: ${name}`);
+  if (!readOnly && !policies.get(server)?.has(name)) return;
+  // Erase SDK/Zod recursive inference only at this boundary. SDK validates inputs.
+  (server.registerTool as any)(name, {
+    ...definition,
+    annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: true },
+  }, async (args: TArgs, extra: { signal: AbortSignal }) => {
+    try { return await clients.get(server)!.runOperation(() => handler(args), extra.signal); }
+    catch { return { content: [{ type: 'text', text: 'Tool execution failed' }], isError: true }; }
+  });
 }
