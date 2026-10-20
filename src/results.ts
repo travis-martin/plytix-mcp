@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { READ_TOOLS } from './policy.js';
 
 export interface ReadEvidence {
   source: string;
@@ -61,7 +62,7 @@ export function decorateResult(name: string, result: ToolResult, started: string
       : object.scope?.complete_for_query === true || object.coverage?.complete_for_query === true
         ? 'complete_for_query' : 'not_asserted',
     ...(object.pagination ? { pagination: object.pagination } : {}),
-    ...(result.isError ? { error_code: errorCode, retryable: errorCode === 'rate_limited' } : {}),
+    ...(result.isError ? { error_code: errorCode, retryable: errorCode === 'rate_limited' && READ_TOOLS.has(name) } : {}),
     warnings: [],
     ...result.resultMetadata,
     // Handlers cannot make an error look successful.

@@ -24,6 +24,12 @@ it('does not mistake a completed tool, sampled query or accepted write for full 
     .structuredContent.metadata.coverage).toBe('complete_for_query');
 });
 
+it('offers a retry hint only for rate-limited reads, never for a mutation', () => {
+  const error = { content: [{ type: 'text', text: 'Plytix request failed (HTTP 429)' }], isError: true };
+  expect(decorateResult('products_get', error, '', []).structuredContent.metadata.retryable).toBe(true);
+  expect(decorateResult('products_update', error, '', []).structuredContent.metadata.retryable).toBe(false);
+});
+
 it('keeps real cached attribute evidence dated and prevents consumers mutating the cache', async () => {
   vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
     const path = String(url);

@@ -5,7 +5,7 @@
 | Check | Result |
 | --- | --- |
 | `npm run typecheck` / `npm run build` | Pass |
-| `npm test` | 160 tests pass across 19 files |
+| `npm test` | 161 tests pass across 19 files |
 | Shared workspace isolation | Fixtures verify colleague sharing, other-workspace isolation, wrong passwords, removed bindings and upstream authentication failure |
 | Knowledge lifecycle | Fixtures verify proposal approval/allowlist enforcement, contributor restrictions, review revisions, alias conflicts, retirement and history |
 | Storage | Concurrent writers preserve updates; corrupt storage fails closed; schema observations exclude arbitrary product fields |
