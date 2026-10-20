@@ -6,12 +6,16 @@ import { READ_TOOLS } from '../policy.js';
 it('starts the built stdio entry point and executes a credential-free identifier operation', async () => {
   const client = new Client({ name: 'fixture-stdio', version: '1' });
   const transport = new StdioClientTransport({ command: process.execPath, args: ['dist/index.js'],
-    env: { ...process.env as Record<string,string>, PLYTIX_API_KEY: 'fixture', PLYTIX_API_PASSWORD: 'fixture', PLYTIX_WRITE_TOOLS: '[]', DOTENV_CONFIG_PATH: 'not-a-real-env-file' }, stderr: 'pipe' });
+    env: { ...process.env as Record<string,string>, PLYTIX_API_KEY: 'fixture', PLYTIX_API_PASSWORD: 'fixture', PLYTIX_WRITE_TOOLS: '[]',
+      MCP_KNOWLEDGE_CONFIG: '', MCP_KNOWLEDGE_WRITE_TOOLS: '[]', DOTENV_CONFIG_PATH: 'not-a-real-env-file' }, stderr: 'pipe' });
   try {
     await client.connect(transport);
     expect(new Set((await client.listTools()).tools.map(t => t.name))).toEqual(READ_TOOLS);
     const result = await client.callTool({ name: 'identifier_detect', arguments: { value: 'ABC-123' } });
     expect(result.isError).not.toBe(true);
     expect(JSON.stringify(result)).toContain('sku');
+    expect(result.structuredContent).toMatchObject({ metadata: { schema_version: 1, tool: 'identifier_detect', source: 'local' } });
+    expect((await client.listResources()).resources.map(item => item.uri)).toContain('plytix://guides/discovery');
+    expect(JSON.stringify(await client.readResource({ uri: 'plytix://guides/discovery' }))).toContain('catalog_dictionary');
   } finally { await client.close(); }
 });

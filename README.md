@@ -68,6 +68,20 @@ See [security and limitations](docs/security.md) before enabling any mutation.
 
 ## Data discovery and approved writes
 
+Version 0.5 adds `discovery_guide`, `catalog_dictionary`, and `knowledge_status`,
+plus optional approved `knowledge_propose` calls. Start with the guide, resolve
+business terms to real attribute labels, then query current product values.
+Every registered tool now supplies a structured data/metadata envelope with
+source timestamps, freshness, status and coverage; existing first text payloads
+are preserved.
+
+The optional shared knowledge layer is separate from code and scoped through
+operator-managed connection bindings. Colleagues can share dated schema
+observations and reviewed business meanings. Initial setup, membership,
+automatic observation learning, proposal review, packaging and storage limits
+are described in [the shared knowledge guide](docs/knowledge.md). There are no
+organization-specific defaults. No business workspace is created automatically.
+
 Version 0.4 adds schema search, attribute groups, completeness definitions,
 bounded attribute value/option profiling, family inspection, product ancestry
 and inheritance evidence, asset categories, and an API capabilities guide.
@@ -135,8 +149,9 @@ explicitly enabled, plus three local identifier primitives. API endpoint and
 payload helpers remain shared with stdio. Default visibility deliberately changes
 to read-only. SDK validation now applies equally to HTTP and stdio.
 
-No legacy SSE endpoint, durable session, database, background worker or
-organization-specific extension is included. Historical API notes are retained in
+No legacy SSE endpoint, durable protocol session, distributed database or
+background worker is included. Optional shared knowledge uses a private local
+volume; hosted durability requires an appropriate storage backend. Historical API notes are retained in
 `docs/solutions/api-quirks/`; they are snapshots, not a current live verification.
 
 ## License

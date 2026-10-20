@@ -8,6 +8,7 @@ export const WRITE_TOOLS = new Set([
 ]);
 
 export const READ_TOOLS = new Set([
+  'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',
   'attributes_list', 'attributes_get', 'attributes_get_options', 'attributes_filters',
@@ -19,6 +20,16 @@ export const READ_TOOLS = new Set([
   'attributes_search', 'attribute_groups_search', 'attributes_profile_usage', 'families_inspect',
   'products_inspect_inheritance',
 ]);
+
+export const KNOWLEDGE_WRITE_TOOLS = new Set(['knowledge_propose']);
+export function parseKnowledgeWriteTools(value = '[]'): Set<string> {
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { throw new Error('MCP_KNOWLEDGE_WRITE_TOOLS must be a JSON array'); }
+  if (!Array.isArray(parsed) || parsed.some(name => !KNOWLEDGE_WRITE_TOOLS.has(name))) {
+    throw new Error('MCP_KNOWLEDGE_WRITE_TOOLS contains an unknown tool');
+  }
+  return new Set(parsed);
+}
 
 export function parseWriteTools(value = '[]'): Set<string> {
   let parsed: unknown;

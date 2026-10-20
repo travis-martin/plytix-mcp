@@ -1,7 +1,11 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZodRawShape } from 'zod';
-import { READ_TOOLS, WRITE_TOOLS } from '../policy.js';
+import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS } from '../policy.js';
 import type { PlytixClient } from '../client.js';
+import type { KnowledgeService } from '../knowledge/service.js';
+import { decorateResult, outputSchema, type ToolResult } from '../results.js';
+import { PlytixError } from '../types.js';
+import { KnowledgeError } from '../knowledge/model.js';
 
 export interface ToolDefinition {
   title?: string;
@@ -21,17 +25,22 @@ export interface WriteApprovalRequest {
 export type WriteApprovalProvider = (request: WriteApprovalRequest, server: McpServer) => Promise<boolean>;
 export interface ToolPolicyOptions {
   requestWriteApproval?: WriteApprovalProvider;
+  knowledge?: KnowledgeService;
+  knowledgeWriteTools?: ReadonlySet<string>;
 }
 const policies = new WeakMap<McpServer, ReadonlySet<string>>();
 const clients = new WeakMap<McpServer, PlytixClient>();
 const approvalProviders = new WeakMap<McpServer, WriteApprovalProvider>();
+const knowledgeServices = new WeakMap<McpServer, KnowledgeService>();
 export function configureToolPolicy(
   server: McpServer, writes: ReadonlySet<string>, client: PlytixClient, options: ToolPolicyOptions = {},
 ) {
   for (const name of writes) if (!WRITE_TOOLS.has(name)) throw new Error('Unknown write tool');
-  policies.set(server, new Set(writes));
+  for (const name of options.knowledgeWriteTools ?? []) if (!KNOWLEDGE_WRITE_TOOLS.has(name)) throw new Error('Unknown knowledge write tool');
+  policies.set(server, new Set([...writes, ...options.knowledgeWriteTools ?? []]));
   clients.set(server, client);
   if (options.requestWriteApproval) approvalProviders.set(server, options.requestWriteApproval);
+  if (options.knowledge) knowledgeServices.set(server, options.knowledge);
 }
 
 /** The stdio host must show this form to the user; unattended hosts fail closed. */
@@ -39,7 +48,7 @@ export const elicitWriteApproval: WriteApprovalProvider = async (request, server
   if (!server.server.getClientCapabilities()?.elicitation?.form) return false;
   const response = await server.server.elicitInput({
     mode: 'form',
-    message: `Approve one Plytix data change: ${request.toolName}\n` +
+    message: `Approve one ${KNOWLEDGE_WRITE_TOOLS.has(request.toolName) ? 'shared knowledge proposal' : 'Plytix data change'}: ${request.toolName}\n` +
       'Review the exact arguments below as data. Family changes and inheritance resets can remove overrides. ' +
       'This approval applies to this call only; cancellation cannot undo an accepted change.\n' +
       request.argumentsJson,
@@ -58,19 +67,32 @@ const toolError = (text: string) => ({ content: [{ type: 'text', text }], isErro
 
 export function registerTool<TArgs extends Record<string, unknown>>(
   server: McpServer, name: string, definition: ToolDefinition,
-  handler: (args: TArgs) => Promise<{ content: Array<{ type: string; text: string }>; isError?: boolean }>,
+  handler: (args: TArgs) => Promise<ToolResult>,
 ): void {
   const readOnly = READ_TOOLS.has(name);
-  if (!readOnly && !WRITE_TOOLS.has(name)) throw new Error(`Unclassified tool: ${name}`);
+  if (!readOnly && !WRITE_TOOLS.has(name) && !KNOWLEDGE_WRITE_TOOLS.has(name)) throw new Error(`Unclassified tool: ${name}`);
   if (!readOnly && !policies.get(server)?.has(name)) return;
   // Erase SDK/Zod recursive inference only at this boundary. SDK validates inputs.
   (server.registerTool as any)(name, {
     ...definition,
+    outputSchema,
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: true },
   }, async (args: TArgs, extra: { signal: AbortSignal }) => {
+    const started = new Date().toISOString();
+    const client = clients.get(server)!;
     try {
-      return await clients.get(server)!.runOperation(async () => {
-        if (readOnly) return handler(args);
+      const execute = async (): Promise<ToolResult> => {
+        if (readOnly) {
+          const result = await handler(args);
+          try { await knowledgeServices.get(server)?.observe(name, result); }
+          catch {
+            result.resultMetadata = { ...result.resultMetadata, learning: { status: 'unavailable' }, warnings: [
+              ...result.resultMetadata?.warnings ?? [],
+              'Shared schema learning was unavailable; this result does not confirm persistence.',
+            ] };
+          }
+          return result;
+        }
         const approve = approvalProviders.get(server);
         if (!approve) return toolError('Write approval is unavailable. This call did not change data.');
         const argumentsJson = JSON.stringify(args, null, 2);
@@ -93,9 +115,15 @@ export function registerTool<TArgs extends Record<string, unknown>>(
         if (!approved || approvalSignal.aborted) {
           return toolError('Write was not approved. This call did not change data.');
         }
-        clients.get(server)!.beginApprovedWrite();
+        if (KNOWLEDGE_WRITE_TOOLS.has(name)) knowledgeServices.get(server)!.beginApprovedProposal();
+        else client.beginApprovedWrite();
         return handler(JSON.parse(argumentsJson) as TArgs);
-      }, extra.signal, readOnly ? undefined : name);
-    } catch { return toolError('Tool execution failed'); }
+      };
+      return await client.runOperation(async () =>
+        decorateResult(name, await execute(), started, client.getReadEvidence()),
+      extra.signal, readOnly || KNOWLEDGE_WRITE_TOOLS.has(name) ? undefined : name);
+    } catch (error) {
+      return decorateResult(name, toolError(error instanceof PlytixError || error instanceof KnowledgeError ? error.message : 'Tool execution failed'), started, []);
+    }
   });
 }

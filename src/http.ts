@@ -4,8 +4,9 @@ import express from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { PlytixClient } from './client.js';
 import { createServer } from './server.js';
-import { parseWriteTools } from './policy.js';
+import { parseWriteTools, parseKnowledgeWriteTools } from './policy.js';
 import type { WriteApprovalProvider } from './tools/register.js';
+import { KnowledgeRegistry } from './knowledge/registry.js';
 
 export interface HttpConfig {
   host: string;
@@ -15,6 +16,8 @@ export interface HttpConfig {
   writeTools: ReadonlySet<string>;
   requestsPerMinute?: number;
   maxConcurrentRequests?: number;
+  knowledgeRegistry?: KnowledgeRegistry;
+  knowledgeWriteTools?: ReadonlySet<string>;
   /** Trusted embedding only. The standalone HTTP entry point supplies no approval provider. */
   requestWriteApproval?: (
     approval: Parameters<WriteApprovalProvider>[0],
@@ -30,6 +33,8 @@ export function loadHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig
     allowedOrigins: (env.MCP_ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
     authToken: env.MCP_AUTH_TOKEN,
     writeTools: parseWriteTools(env.PLYTIX_WRITE_TOOLS),
+    knowledgeRegistry: env.MCP_KNOWLEDGE_CONFIG ? new KnowledgeRegistry(env.MCP_KNOWLEDGE_CONFIG) : undefined,
+    knowledgeWriteTools: parseKnowledgeWriteTools(env.MCP_KNOWLEDGE_WRITE_TOOLS),
   };
 }
 const digest = (value: string) => createHash('sha256').update(value).digest();
@@ -51,10 +56,12 @@ function hasDuplicateSecurityHeaders(req: Request): boolean {
 export function createHttpApp(input: HttpConfig) {
   // Snapshot operator policy so later mutation of input sets cannot broaden access.
   const config = { ...input, writeTools: new Set(input.writeTools),
+    knowledgeWriteTools: new Set(input.knowledgeWriteTools),
     allowedHosts: input.allowedHosts.map(host => host.toLowerCase()), allowedOrigins: [...input.allowedOrigins] };
   parseWriteTools(JSON.stringify([...config.writeTools]));
+  parseKnowledgeWriteTools(JSON.stringify([...config.knowledgeWriteTools]));
   const loopback = ['127.0.0.1', '::1', 'localhost'].includes(config.host);
-  if ((!loopback || config.writeTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
+  if ((!loopback || config.writeTools.size > 0 || config.knowledgeWriteTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
     throw new Error('Remote access or write tools require MCP_AUTH_TOKEN of at least 32 characters');
   }
   if (!config.allowedHosts.length || config.allowedHosts.some(host =>
@@ -123,6 +130,8 @@ export function createHttpApp(input: HttpConfig) {
     const client = new PlytixClient({ apiKey, apiPassword, allowWrites: config.writeTools.size > 0, writeTools: config.writeTools });
     res.locals.plytixClient = client;
     const server = createServer(client, config.writeTools, {
+      knowledgeRegistry: config.knowledgeRegistry,
+      knowledgeWriteTools: config.knowledgeWriteTools,
       requestWriteApproval: config.requestWriteApproval
         ? (approval, mcpServer) => config.requestWriteApproval!(approval, mcpServer, req)
         : undefined,

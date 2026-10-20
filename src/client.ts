@@ -11,6 +11,8 @@
 
 import { isReadRequest, isWriteRequestForTool, WRITE_TOOLS } from './policy.js';
 import { stripAttributesPrefix } from './utils/attribute-labels.js';
+import { credentialFingerprint } from './knowledge/registry.js';
+import type { ReadEvidence } from './results.js';
 import type {
   PlytixAuthToken,
   PlytixAuthResponse,
@@ -44,7 +46,22 @@ export class PlytixClient {
   private responseBytes = 0;
   private cancelled = false;
   private readonly controllers = new Set<AbortController>();
-  private readonly attributesByLabel = new Map<string, { value: PlytixAttributeDetail; expires: number }>();
+  private readonly attributesByLabel = new Map<string, { value: PlytixAttributeDetail; expires: number; observedAt: string }>();
+  private readEvidence: ReadEvidence[] = [];
+  private operationId = 0;
+  getOperationId(): number { return this.operationId; }
+
+  knowledgeFingerprint(): string {
+    return credentialFingerprint(this.config.apiKey, this.config.apiPassword, this.config.baseUrl, this.config.authUrl);
+  }
+  async verifyKnowledgeAccess(): Promise<void> {
+    // Reauthenticate for shared knowledge access; a previously cached token must
+    // not keep a revoked credential's shared knowledge accessible indefinitely.
+    await this.authenticate();
+    this.assertActive();
+  }
+  getReadEvidence(): ReadEvidence[] { return structuredClone(this.readEvidence); }
+  checkOperationActive(): void { this.assertActive(); }
 
   private activeOperation?: Promise<unknown>;
   private operationSignal?: AbortSignal;
@@ -56,6 +73,8 @@ export class PlytixClient {
     this.operationDeadline = Date.now() + 45_000;
     this.requestCount = 0;
     this.responseBytes = 0;
+    this.readEvidence = [];
+    this.operationId++;
     this.operationSignal = signal;
     this.operationTool = toolName;
     this.operationReads = new Map();
@@ -280,6 +299,7 @@ export class PlytixClient {
       if (readOnly && (!result || !Array.isArray(result.data))) {
         throw new PlytixError('Invalid Plytix response envelope');
       }
+      if (readOnly) this.readEvidence.push({ source: endpoint, observed_at: new Date().toISOString() });
       return result;
     } catch (error) {
       if (error instanceof PlytixError) throw error;
@@ -520,7 +540,11 @@ export class PlytixClient {
     const normalized = stripAttributesPrefix(label);
     if (!normalized) throw new PlytixError('Attribute label is required');
     const cached = this.attributesByLabel.get(normalized);
-    if (cached && cached.expires > Date.now()) return cached.value;
+    if (cached && cached.expires > Date.now()) {
+      this.assertActive();
+      this.readEvidence.push({ source: `/api/v1/attributes/product/${encodeURIComponent(cached.value.id)}`, observed_at: cached.observedAt, cached: true });
+      return structuredClone(cached.value);
+    }
     const matches = await this.searchAttributes({
       filters: [[{ field: 'label', operator: 'eq', value: normalized }]],
       attributes: ['label'], pagination: { page: 1, page_size: 2 },
@@ -531,7 +555,7 @@ export class PlytixClient {
     if (detail && detail.label !== normalized) throw new PlytixError('Attribute lookup returned an inconsistent label');
     if (detail) {
       if (this.attributesByLabel.size >= 500) this.attributesByLabel.clear();
-      this.attributesByLabel.set(normalized, { value: detail, expires: Date.now() + 5 * 60_000 });
+      this.attributesByLabel.set(normalized, { value: structuredClone(detail), expires: Date.now() + 5 * 60_000, observedAt: new Date().toISOString() });
     }
     return detail;
   }

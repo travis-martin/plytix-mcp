@@ -31,6 +31,12 @@ so mutation readback is fresh.
 
 ## Discovery contracts
 
+Version 0.5 adds an account-independent `discovery_guide` and
+`catalog_dictionary`, which combines live schema search with separately stored
+business knowledge. `knowledge_status` reports the bound workspace and learning
+mode. Optional `knowledge_propose` writes only to the separate proposal store,
+never to Plytix. See [setup and result contracts](knowledge.md).
+
 | New tool | Agent use |
 | --- | --- |
 | `attributes_search` | Find attribute names, labels, types, groups, options and completeness members |

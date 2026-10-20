@@ -1,5 +1,24 @@
 # Validation
 
+## Version 0.5.0 — October 20, 2026
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` / `npm run build` | Pass |
+| `npm test` | 160 tests pass across 19 files |
+| Shared workspace isolation | Fixtures verify colleague sharing, other-workspace isolation, wrong passwords, removed bindings and upstream authentication failure |
+| Knowledge lifecycle | Fixtures verify proposal approval/allowlist enforcement, contributor restrictions, review revisions, alias conflicts, retirement and history |
+| Storage | Concurrent writers preserve updates; corrupt storage fails closed; schema observations exclude arbitrary product fields |
+| Transports | SDK stdio and stateless HTTP exercise discovery, guide resources and structured metadata |
+| Package | `npm pack` produces an installable 0.5.0 tarball; manifest inspection excludes credentials, private stores and dependencies |
+| Extracted package smoke | Built stdio handshake, version, discovery tools/resource and hidden writes pass |
+| Live account reads / business workspace activation / deployment | Not performed for this release |
+
+These are fixture and local packaging checks, not evidence of hosted durability,
+production membership setup, client human-approval UI support or live catalog
+initialization. The filesystem knowledge backend requires a private durable local
+volume; a distributed hosted backend remains separate work.
+
 ## Version 0.4.1 — October 20, 2026
 
 | Check | Result |

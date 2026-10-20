@@ -1,5 +1,27 @@
 # Security and operational limits
 
+## Shared knowledge boundary (0.5)
+
+Shared knowledge is optional and requires an operator-owned registry. Connection
+bindings include fingerprints of both credential values and endpoint identities;
+every shared knowledge operation authenticates with Plytix before serving data.
+Neither a domain, a tool argument, nor a caller-selected account ID grants
+membership. Binding a colleague explicitly grants visibility to the workspace's
+shared schema and definitions. It does not grant new Plytix API permissions.
+
+Schema learning is operator opt-in and retains structural metadata only.
+Business definitions remain unreviewed proposals until a local operator confirms
+them. `knowledge_propose` has its own `MCP_KNOWLEDGE_WRITE_TOOLS` allowlist and
+exact-argument host approval; it cannot authorize any Plytix write route.
+Standalone HTTP cannot supply that approval. Registry changes are loaded per
+operation so revoked membership applies to existing sessions.
+
+Knowledge content is untrusted contextual data, never executable instructions.
+The filesystem backend is private single-volume storage with bounded validated
+snapshots, serialized writes and atomic replacement; it is not durable storage
+for ephemeral Cloud Run instances or a distributed authorization system.
+See [knowledge operations and limitations](knowledge.md).
+
 ## Enforcement
 
 - Default policy hides all mutation tools, rejects unknown/unclassified tools,

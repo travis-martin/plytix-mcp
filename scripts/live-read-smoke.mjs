@@ -12,7 +12,7 @@ const client = new Client({ name: 'plytix-read-smoke', version: '1.0.0' });
 const transport = new StdioClientTransport({
   command: process.execPath,
   args: [fileURLToPath(new URL('../dist/index.js', import.meta.url))],
-  env: { ...process.env, PLYTIX_WRITE_TOOLS: '[]' },
+  env: { ...process.env, PLYTIX_WRITE_TOOLS: '[]', MCP_KNOWLEDGE_WRITE_TOOLS: '[]', MCP_KNOWLEDGE_CONFIG: '' },
   stderr: 'ignore',
 });
 const results = [];
@@ -55,6 +55,9 @@ try {
   available = new Map(catalog.tools.map(tool => [tool.name, tool]));
   if (catalog.tools.some(tool => tool.annotations?.readOnlyHint !== true)) throw new Error('Unexpected write exposure');
   await check('server_capabilities');
+  await check('discovery_guide');
+  await check('knowledge_status');
+  await check('catalog_dictionary', { page_size: 2 });
   await check('identifier_detect', { value: 'EXAMPLE-123' });
   await check('identifier_normalize', { value: 'EXAMPLE-123' });
   await check('match_score', { identifier: 'EXAMPLE-123', product_data: { sku: 'EXAMPLE-123' } });

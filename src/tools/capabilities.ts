@@ -12,6 +12,14 @@ export function registerCapabilityTools(server: McpServer) {
       text: JSON.stringify({
         documentation: 'https://apidocs.plytix.com/',
         reviewed_on: '2026-10-20',
+        getting_started: {
+          guide: 'discovery_guide',
+          dictionary: 'catalog_dictionary',
+          shared_knowledge: 'knowledge_status',
+          guide_resource: 'plytix://guides/discovery',
+          learning: 'Operator-enabled schema observations are shared within an explicitly bound workspace. Business meanings remain proposals until reviewed.',
+          result_contract: 'structuredContent.data preserves the tool payload; structuredContent.metadata provides source timestamps, status, freshness and coverage. The first text block remains compatible.',
+        },
         versions: {
           products: 'v2 preferred for supported product reads, searches and writes; lightweight linked IDs avoid unnecessary expanded payloads',
           variant_listing: 'v1; no GET variants route is documented for v2',

@@ -23,6 +23,7 @@ function toolsFor(register: (server: McpServer, client: PlytixClient) => void, m
   const client = {
     runOperation: <T>(work: () => Promise<T>) => work(),
     beginApprovedWrite: () => {},
+    getReadEvidence: () => [],
     ...methods,
   } as unknown as PlytixClient;
   configureToolPolicy(server, WRITE_TOOLS, client, { requestWriteApproval: async () => true });

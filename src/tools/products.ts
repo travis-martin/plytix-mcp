@@ -16,7 +16,7 @@ import { filterSchema } from '../utils/search-schema.js';
 
 export function registerProductTools(server: McpServer, client: PlytixClient) {
   // Create lookup instance for smart search
-  const lookup = new PlytixLookup(client);
+  const lookup = new PlytixLookup(client, { cacheEnabled: false });
 
   // ─────────────────────────────────────────────────────────────
   // products.lookup - Smart identifier-based lookup
@@ -27,7 +27,7 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
     'products_lookup',
     {
       title: 'Smart Product Lookup',
-      description: 'Find the best product match for an identifier.',
+      description: 'Find a product by ID, SKU, GTIN, manufacturer identifier or label. Returns match evidence, confidence and alternatives; inspect ambiguity before choosing. Use products_get_full only when related sections are needed.',
       inputSchema: {
         identifier: z.string().min(1).describe('Product identifier (ID, SKU, MPN, GTIN, or label)'),
         type: z
