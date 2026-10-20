@@ -49,6 +49,7 @@ export class PlytixClient {
   private activeOperation?: Promise<unknown>;
   private operationSignal?: AbortSignal;
   private operationTool?: string;
+  private operationReads?: Map<string, Promise<PlytixResult<unknown>>>;
   runOperation<T>(work: () => Promise<T>, signal?: AbortSignal, toolName?: string): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
     if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
@@ -57,12 +58,14 @@ export class PlytixClient {
     this.responseBytes = 0;
     this.operationSignal = signal;
     this.operationTool = toolName;
+    this.operationReads = new Map();
     const abort = () => { for (const controller of this.controllers) controller.abort(); };
     signal?.addEventListener('abort', abort, { once: true });
     const pending = Promise.resolve().then(work).finally(() => {
       signal?.removeEventListener('abort', abort);
       this.operationSignal = undefined;
       this.operationTool = undefined;
+      this.operationReads = undefined;
       this.activeOperation = undefined;
     });
     this.activeOperation = pending;
@@ -87,8 +90,12 @@ export class PlytixClient {
     for (const controller of this.controllers) controller.abort();
   }
 
-  private requestTimeout(): number {
+  private assertActive(): void {
     if (this.cancelled || this.operationSignal?.aborted || Date.now() >= this.operationDeadline) throw new PlytixError('Plytix operation cancelled or exceeded its 45 second budget');
+  }
+
+  private requestTimeout(): number {
+    this.assertActive();
     if (++this.requestCount > 512) throw new PlytixError('Plytix operation exceeded its 512 request budget');
     return Math.min(this.config.timeoutMs, this.operationDeadline - Date.now());
   }
@@ -206,6 +213,31 @@ export class PlytixClient {
   private async request<T = unknown>(
     endpoint: string, options: RequestInit = {}, retries = 1,
   ): Promise<PlytixResult<T>> {
+    this.assertActive();
+    const readOnly = isReadRequest(endpoint, (options.method ?? 'GET').toUpperCase());
+    // Reuse identical reads only inside one tool invocation. Never retain product
+    // values across calls, and invalidate before a mutation so readback is fresh.
+    if (!readOnly) this.operationReads?.clear();
+    const reads = this.operationReads;
+    if (!readOnly || !reads || (options.body !== undefined && typeof options.body !== 'string')) {
+      return this.requestUncached<T>(endpoint, options, retries);
+    }
+    const key = JSON.stringify([options.method ?? 'GET', endpoint, options.body ?? null]);
+    let pending = reads.get(key) as Promise<PlytixResult<T>> | undefined;
+    if (!pending) {
+      pending = this.requestUncached<T>(endpoint, options, retries);
+      reads.set(key, pending);
+      void pending.catch(() => { if (reads.get(key) === pending) reads.delete(key); });
+    }
+    // Callers can format their copy without changing another consumer's response.
+    const result = await pending;
+    this.assertActive();
+    return structuredClone(result);
+  }
+
+  private async requestUncached<T = unknown>(
+    endpoint: string, options: RequestInit = {}, retries = 1,
+  ): Promise<PlytixResult<T>> {
     const method = (options.method ?? 'GET').toUpperCase();
     if (!/^\/api\/v[12]\//.test(endpoint) || /[?#\\]/.test(endpoint) || /\/(?:\.|%2e){1,2}(?:\/|$)/i.test(endpoint)) {
       throw new PlytixError('Invalid API path');
@@ -236,7 +268,7 @@ export class PlytixClient {
           clearTimeout(timeout);
           if (response.status === 401) this.token = undefined;
           if (delay) await new Promise(resolve => setTimeout(resolve, delay));
-          return this.request<T>(endpoint, options, retries - 1);
+          return this.requestUncached<T>(endpoint, options, retries - 1);
         }
       }
       if (response.status === 204) return { data: [] } as PlytixResult<T>;
@@ -301,9 +333,30 @@ export class PlytixClient {
   }
 
   async getFamily(familyId: string): Promise<PlytixResult<PlytixFamily>> {
-    return this.request<PlytixFamily>(
-      `/api/v1/product_families/${encodeURIComponent(familyId)}`
-    );
+    try {
+      return await this.request<PlytixFamily>(`/api/v1/product_families/${encodeURIComponent(familyId)}`);
+    } catch (error) {
+      if (!(error instanceof PlytixError) || error.status !== 403) throw error;
+      // The same API role can read family metadata through documented search even
+      // when direct detail is forbidden. Do not pretend this is a full detail read.
+      const result = await this.searchFamilies({
+        filters: [[{ field: 'id', operator: 'eq', value: familyId }]],
+        attributes: ['name', 'total_products', 'total_attributes', 'total_models', '_created_at',
+          'modified', 'created_user_audit', 'modified_user_audit'],
+        pagination: { page: 1, page_size: 2 },
+      });
+      const family = result.data.find(row => row.id === familyId);
+      // An empty or inconsistent search does not prove that the family is absent.
+      if (!family) throw error;
+      return {
+        data: [family],
+        meta: {
+          source: 'family_search',
+          complete: false,
+          reason: 'Family metadata recovered by exact-ID search. The detail endpoint returned HTTP 403; additional detail fields may be unavailable.',
+        },
+      };
+    }
   }
 
   async createFamily(data: {

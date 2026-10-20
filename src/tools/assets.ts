@@ -8,6 +8,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
 import type { PlytixSearchBody } from '../types.js';
+import { PlytixError } from '../types.js';
 import { registerTool } from './register.js';
 import { filterSchema } from '../utils/search-schema.js';
 
@@ -125,7 +126,7 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
     'asset_categories_search',
     {
       title: 'Search Asset Categories',
-      description: 'Find asset categories with their hierarchy paths, parent IDs, child counts, and ordering.',
+      description: 'Find asset categories with hierarchy details. If category settings are forbidden, returns only accessible category IDs from asset filters, with explicit limitations.',
       inputSchema: {
         query: z.string().optional().describe('Optional category name contains filter'),
         pagination: z.object({
@@ -147,6 +148,65 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
           pagination: result.pagination,
         }, null, 2) }] };
       } catch (error) {
+        if (error instanceof PlytixError && error.status === 403) {
+          const errors = [{ section: 'asset_categories', message: error.message }];
+          try {
+            const filters = await client.getAssetFilters();
+            const categoryFilter = filters.data.find(filter => (filter.key ?? filter.field) === 'categories');
+            if (!Array.isArray(categoryFilter?.options)) {
+              throw new Error('Asset filters did not provide category ID options');
+            }
+            const options = categoryFilter.options;
+            const stringIds = options.filter((option): option is string =>
+              typeof option === 'string' && option.trim().length > 0);
+            if (options.length > 0 && stringIds.length === 0) {
+              throw new Error('Asset filters did not provide supported category ID options');
+            }
+            const ids = [...new Set(stringIds)];
+            const page = pagination?.page ?? 1;
+            const pageSize = pagination?.page_size ?? 25;
+            const start = (page - 1) * pageSize;
+            const availableIds = ids.slice(start, start + pageSize);
+            return { content: [{ type: 'text', text: JSON.stringify({
+              categories: null,
+              partial: true,
+              _retrieval: {
+                source: 'assets_filters',
+                reason: 'Asset category search returned HTTP 403. Category names and hierarchy are unavailable with this connection.',
+              },
+              fallback_scope: 'Category IDs exposed as asset filter options only; this does not establish a complete category hierarchy.',
+              requested_query: query ?? null,
+              query_applied: false,
+              requested_order: pagination?.order ?? null,
+              order_applied: false,
+              available_category_ids: availableIds,
+              available_category_ids_pagination: {
+                page,
+                page_size: pageSize,
+                count: availableIds.length,
+                total_count: ids.length,
+                has_more: start + pageSize < ids.length,
+                truncated: availableIds.length < ids.length,
+              },
+              ignored_filter_options: options.length - stringIds.length,
+              errors,
+            }, null, 2) }] };
+          } catch (fallbackError) {
+            errors.push({
+              section: 'assets_filters',
+              message: fallbackError instanceof Error ? fallbackError.message : 'Request failed',
+            });
+            return {
+              content: [{ type: 'text', text: JSON.stringify({
+                categories: null,
+                available_category_ids: null,
+                partial: true,
+                errors,
+              }, null, 2) }],
+              isError: true,
+            };
+          }
+        }
         return {
           content: [{ type: 'text', text: `Error searching asset categories: ${error instanceof Error ? error.message : 'Unknown error'}` }],
           isError: true,

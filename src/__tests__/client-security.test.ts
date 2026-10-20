@@ -101,7 +101,7 @@ describe('Plytix API security boundaries', () => {
     vi.spyOn(globalThis, 'fetch').mockImplementation(async url => String(url).includes('/auth/') ? auth() : Response.json({ data: [] }));
     const client = new PlytixClient(credentials);
     await expect(client.runOperation(async () => {
-      for (let i = 0; i < 513; i++) await client.getProduct('fixture');
+      for (let i = 0; i < 513; i++) await client.getProduct(`fixture-${i}`);
     })).rejects.toThrow('512 request budget');
     await expect(client.runOperation(() => client.getProduct('fixture'))).resolves.toEqual({ data: [] });
     client.cancel();

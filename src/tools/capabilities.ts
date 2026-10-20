@@ -13,10 +13,10 @@ export function registerCapabilityTools(server: McpServer) {
         documentation: 'https://apidocs.plytix.com/',
         reviewed_on: '2026-10-20',
         versions: {
-          products: 'v2, documented by Plytix as an open beta',
+          products: 'v2 preferred for supported product reads, searches and writes; lightweight linked IDs avoid unnecessary expanded payloads',
           variant_listing: 'v1; no GET variants route is documented for v2',
           schema_and_assets: 'v1',
-          strategy: 'Use documented versions per operation; a higher version number does not imply a stable release.',
+          strategy: 'Prefer product v2 where supported and useful; retain v1 for operations with no documented v2 equivalent.',
         },
         discovery: [
           'Product values, parent IDs, overwritten attributes, relationships, categories, and assets',
@@ -24,6 +24,7 @@ export function registerCapabilityTools(server: McpServer) {
           'Family attributes and inheritance levels',
           'Product and asset category paths, parents, and ordering',
           'Asset metadata and alt_text where returned by the API',
+          'Product search by relationship presence or absence; selectable related sections in products_get_full',
         ],
         limitations: {
           channels: 'The public API reference does not document channel configuration, formulas, mapping, processing, or export endpoints.',
@@ -32,6 +33,7 @@ export function registerCapabilityTools(server: McpServer) {
           completeness: 'The API exposes CompletenessAttribute member definitions and product values. A completeness percentage alone is not evidence of business quality.',
           inheritance: 'Family levels describe inheritance configuration; product overwritten_attributes describes exceptions. Equal values alone do not establish inheritance.',
           asset_metadata: 'GET asset returns available metadata. The documented mutable fields are filename, categories, and alt_text (maximum 512 characters).',
+          restricted_metadata: 'Family detail HTTP 403 falls back to permitted exact-ID family search with explicit provenance. Asset category HTTP 403 can return filter-exposed category IDs only; names and hierarchy remain unavailable.',
         },
         write_safety: {
           default: 'Read-only. Write tools are hidden unless explicitly allowlisted.',

@@ -17,7 +17,7 @@ import { registerInheritanceTools } from './tools/inheritance.js';
 export function createServer(
   client: PlytixClient, writeTools: ReadonlySet<string> = new Set(), options: ToolPolicyOptions = {},
 ) {
-  const server = new McpServer({ name: 'plytix-mcp', version: '0.4.0' });
+  const server = new McpServer({ name: 'plytix-mcp', version: '0.4.1' });
   configureToolPolicy(server, writeTools, client, options);
   registerProductTools(server, client);
   registerFamilyTools(server, client);

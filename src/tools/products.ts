@@ -144,17 +144,22 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
   // products.get_full - Product + family + variants + categories + assets
   // ─────────────────────────────────────────────────────────────
 
-  registerTool<{ product_id: string }>(
+  registerTool<{ product_id: string; include: Array<'family' | 'variants' | 'categories' | 'assets'> }>(
     server,
     'products_get_full',
     {
       title: 'Get Product (Full)',
-      description: 'Get one product with related data.',
+      description: 'Get one product with related data. Select only the needed sections to reduce API calls and response size.',
       inputSchema: {
         product_id: z.string().min(1).describe('The product ID to fetch'),
+        include: z
+          .array(z.enum(['family', 'variants', 'categories', 'assets']))
+          .max(4)
+          .default(['family', 'variants', 'categories', 'assets'])
+          .describe('Related sections to fetch and return. Defaults to all; [] returns only the product. Unrequested sections are omitted.'),
       },
     },
-    async ({ product_id }) => {
+    async ({ product_id, include }) => {
       try {
         const productResult = await client.getProduct(product_id);
         const product = productResult.data?.[0] as PlytixProduct | undefined;
@@ -166,13 +171,14 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
           };
         }
 
+        const requested = new Set(include);
         const familyId = product.product_family_id;
         const [familyResult, variantsResult, categoriesResult, assetsResult] =
           await Promise.allSettled([
-            familyId ? client.getFamily(familyId) : Promise.resolve(null),
-            client.getProductVariants(product_id),
-            client.getProductCategories(product_id),
-            client.getProductAssets(product_id),
+            requested.has('family') && familyId ? client.getFamily(familyId) : Promise.resolve(null),
+            requested.has('variants') ? client.getProductVariants(product_id) : Promise.resolve(null),
+            requested.has('categories') ? client.getProductCategories(product_id) : Promise.resolve(null),
+            requested.has('assets') ? client.getProductAssets(product_id) : Promise.resolve(null),
           ]);
 
         const errors: string[] = [];
@@ -182,6 +188,7 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
           familyResult.status === 'fulfilled'
             ? (familyResult.value?.data?.[0] ?? null)
             : (errors.push(`family: ${errMsg(familyResult.reason)}`), null);
+        const familyMetadata = familyResult.status === 'fulfilled' ? familyResult.value?.meta : undefined;
 
         const variants =
           variantsResult.status === 'fulfilled'
@@ -205,10 +212,12 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
               text: JSON.stringify(
                 {
                   product,
-                  family,
-                  variants,
-                  categories,
-                  assets,
+                  ...(requested.has('family') ? { family } : {}),
+                  ...(requested.has('variants') ? { variants } : {}),
+                  ...(requested.has('categories') ? { categories } : {}),
+                  ...(requested.has('assets') ? { assets } : {}),
+                  ...(familyMetadata ? { _retrieval: { family: familyMetadata } } : {}),
+                  ...(errors.length > 0 || familyMetadata?.complete === false ? { partial: true } : {}),
                   ...(errors.length > 0 ? { _errors: errors } : {}),
                 },
                 null,
@@ -238,6 +247,7 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
   registerTool<{
     attributes?: string[];
     filters?: PlytixSearchBody['filters'];
+    relationship_filters?: PlytixSearchBody['relationship_filters'];
     pagination?: { page: number; page_size: number; order?: string };
     sort?: unknown;
   }>(
@@ -245,7 +255,7 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
     'products_search',
     {
       title: 'Search Products',
-      description: 'Search products with filters and explicit returned fields. Use products_filters to discover valid field keys and operators.',
+      description: 'Search products with filters, optional relationship presence filters, and explicit returned fields. Use products_filters to discover valid field keys and operators.',
       inputSchema: {
         attributes: z
           .array(z.string())
@@ -259,6 +269,17 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
             'Search filters. Conditions within each inner array are AND; separate inner arrays are OR. ' +
               'Format: [[{field, operator, value}], [{field, operator, value}]]'
           ),
+        relationship_filters: z
+          .array(z.array(z.object({
+            relationship_id: z.string().min(1),
+            operator: z.enum(['exists', '!exists']),
+          })))
+          .refine(
+            groups => new Set(groups.flat().map(filter => filter.relationship_id)).size <= 1,
+            { message: 'Relationship filters must reference a single relationship_id.' },
+          )
+          .optional()
+          .describe('Filter relationship presence (exists) or absence (!exists). Inner conditions are AND, outer groups are OR. Every condition must reference the same relationship_id from relationships_search.'),
         pagination: z
           .object({
             page: z.number().int().positive().default(1),

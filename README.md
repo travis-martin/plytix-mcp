@@ -75,11 +75,19 @@ Existing asset tools expose metadata and alt text. Product and schema filters
 preserve the operators supplied by Plytix, including parent/variant properties.
 See [API coverage and limitations](docs/api-coverage.md) for the tool guide.
 
-The current official reference still labels product v2 as beta. Product reads
-use its lightweight responses; variant listing uses the documented v1 route.
+Product v2 is preferred for supported operations and its lightweight responses;
+variant listing uses the documented v1 route because a v2 GET is unavailable.
 Schema, families, relationships definitions, and assets use v1. Channels, channel
 formulas, and product-list definitions have no documented public endpoints;
 the server reports those gaps instead of guessing private routes.
+
+Version 0.4.1 also adds selectable `products_get_full.include` sections,
+relationship presence/absence filters in `products_search`, and more reliable
+identifier matching. Identical reads within a tool call are reused without
+keeping product data cached between calls. When restricted endpoints return 403,
+family metadata can recover through exact-ID search and asset category IDs can
+recover through readable filters; outputs clearly identify partial data and
+missing taxonomy names/hierarchy.
 
 Use the [two-connection template](deploy/codex-stdio-modes.template.toml) for
 separate read-only and explicitly allowlisted write connections. Every mutation

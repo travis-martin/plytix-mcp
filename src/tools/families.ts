@@ -109,7 +109,10 @@ export function registerFamilyTools(server: McpServer, client: PlytixClient) {
         }
 
         return {
-          content: [{ type: 'text', text: JSON.stringify(result.data[0], null, 2) }],
+          content: [{ type: 'text', text: JSON.stringify({
+            ...result.data[0],
+            ...(result.meta ? { _retrieval: result.meta, partial: !result.meta.complete } : {}),
+          }, null, 2) }],
         };
       } catch (error) {
         return {
@@ -426,7 +429,8 @@ export function registerFamilyTools(server: McpServer, client: PlytixClient) {
           'parent_level means Level 1 inheritance, variant_level means Level 2 inheritance, and no_level means inheritance is off.',
           'all_attributes includes system attributes. Preserve the API configuration as returned; actual product overrides require product data.',
         ],
-        partial: errors.length > 0,
+        ...(family.status === 'fulfilled' && family.value.meta ? { _retrieval: { family: family.value.meta } } : {}),
+        partial: errors.length > 0 || (family.status === 'fulfilled' && family.value.meta?.complete === false),
         ...(errors.length ? { errors } : {}),
       };
       return {

@@ -20,6 +20,10 @@ export interface PlytixSearchFilter {
 
 export interface PlytixSearchBody {
   filters?: PlytixSearchFilter[][];
+  relationship_filters?: Array<Array<{
+    relationship_id: string;
+    operator: 'exists' | '!exists';
+  }>>;
   attributes?: string[];
   pagination?: {
     page?: number;
@@ -43,6 +47,11 @@ export interface PlytixResult<T = unknown> {
   data: T[];
   pagination?: PlytixPagination;
   attributes?: string[];
+  meta?: {
+    source: string;
+    complete: boolean;
+    reason?: string;
+  };
 }
 
 // ─────────────────────────────────────────────────────────────

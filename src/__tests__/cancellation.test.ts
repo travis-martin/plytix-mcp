@@ -66,7 +66,7 @@ it('bounds cumulative JSON retained across otherwise acceptable upstream respons
   vi.spyOn(globalThis, 'fetch').mockImplementation(async url => String(url).includes('/auth/') ?
     Response.json({ data: [{ access_token: 'fixture', expires_in: 900 }] }) : new Response(body));
   await expect(api.runOperation(async () => {
-    for (let i = 0; i < 3; i++) await api.getProduct('fixture');
+    for (let i = 0; i < 3; i++) await api.getProduct(`fixture-${i}`);
   })).rejects.toThrow('aggregate response size limit');
   await expect(api.runOperation(() => api.getProduct('fixture'))).resolves.toMatchObject({ data: [] });
 });

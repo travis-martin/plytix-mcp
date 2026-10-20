@@ -1,5 +1,43 @@
 # Validation
 
+## Version 0.4.1 — October 20, 2026
+
+| Check | Result |
+| --- | --- |
+| `npm run typecheck` | Pass |
+| `npm run build` | Pass |
+| `npm test` | 144 tests pass across 17 files |
+| `npm audit --omit=dev --audit-level=high` | Zero reported production vulnerabilities |
+| Fresh SDK stdio session against the configured local account | All 34 advertised read tools exercised in 40 bounded calls |
+| Live read results | 36 successful calls, four explicit partial results, zero failed or unchecked tools |
+| Live mutations / permission changes / cloud deployment | Not performed |
+
+Direct family detail and asset-category search still return HTTP 403 with
+`No permissions to access this resource.` Both routes match the public reference.
+The server now recovers family metadata through an exact-ID family search and
+asset-category IDs through asset filter options. These are permitted API reads,
+not changes to the connection's role or permissions.
+
+`families_get`, `families_inspect`, and `products_get_full` explicitly mark the
+recovered family metadata as partial. `asset_categories_search` marks its ID-only
+fallback as partial; category names, hierarchy, name filtering and requested sort
+order remain unavailable. See [API coverage](api-coverage.md#restricted-metadata).
+
+Live checks also verified product-only and assets-only expansion, and v2 product
+search with relationship presence and absence filters. An initial unpaced audit
+hit HTTP 429 on its final call; adding a short pause between tool calls allowed
+the complete audit to finish without failures. The read audit remains opt-in.
+
+New fixture coverage verifies fallback status/ID guards, missing or malformed
+category options, fallback pagination, selective expansion, duplicate read
+sharing, independent result copies, cancellation, mutation cache invalidation,
+lookup OR semantics and duplicate-product matching. Request and response budgets
+remain tested using distinct reads. No cross-call product cache was introduced.
+
+The prior container check below remains historical. Human approval UI
+compatibility, live writes, multi-user OAuth and cloud deployment have not been
+validated by this release.
+
 ## Version 0.4.0 — October 20, 2026
 
 | Check | Result |

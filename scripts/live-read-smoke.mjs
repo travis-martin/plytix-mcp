@@ -18,6 +18,9 @@ const transport = new StdioClientTransport({
 const results = [];
 let available = new Map();
 async function check(name, args = {}) {
+  // Keep this full-catalog audit from bursting requests against a live account.
+  // Composite tools may make several upstream reads of their own.
+  await new Promise(resolve => setTimeout(resolve, 500));
   if (!available.has(name)) {
     results.push({ tool: name, status: 'unavailable' });
     console.log(JSON.stringify(results.at(-1)));
@@ -29,8 +32,8 @@ async function check(name, args = {}) {
     const text = result.content?.find(item => item.type === 'text')?.text ?? '';
     let parsed;
     try { parsed = JSON.parse(text); } catch { /* Errors are summarized below, never dumped. */ }
-    const statusCode = /HTTP (\d{3})/.exec(text)?.[1];
     const partial = parsed?._errors?.length || parsed?.errors?.length || parsed?.partial === true;
+    const statusCode = result.isError || partial ? /HTTP (\d{3})/.exec(text)?.[1] : undefined;
     const entry = {
       tool: name,
       status: result.isError ? (statusCode === '403' ? 'access_limited' : 'failed') : partial ? 'partial' : 'passed',
@@ -87,6 +90,8 @@ try {
   if (product?.id) {
     await check('products_get', { product_id: product.id });
     await check('products_get_full', { product_id: product.id });
+    await check('products_get_full', { product_id: product.id, include: [] });
+    await check('products_get_full', { product_id: product.id, include: ['assets'] });
     await check('variants_list', { product_id: product._parent_id ?? product.id });
     await check('categories_list', { product_id: product.id });
     await check('assets_list', { product_id: product.id });
@@ -103,7 +108,16 @@ try {
   await check('asset_categories_search', { pagination: { page: 1, page_size: 2 } });
   await check('categories_search', { pagination: { page: 1, page_size: 2 } });
   const relationships = await check('relationships_search', { pagination: { page: 1, page_size: 1 } });
-  if (relationships?.relationships?.[0]?.id) await check('relationships_get', { relationship_id: relationships.relationships[0].id });
+  if (relationships?.relationships?.[0]?.id) {
+    const relationship_id = relationships.relationships[0].id;
+    await check('relationships_get', { relationship_id });
+    for (const operator of ['exists', '!exists']) {
+      await check('products_search', {
+        relationship_filters: [[{ relationship_id, operator }]],
+        pagination: { page: 1, page_size: 1 }, attributes: ['sku'],
+      });
+    }
+  }
   const checked = new Set(results.map(item => item.tool));
   const unchecked = [...available.keys()].filter(name => !checked.has(name));
   const failures = results.filter(item => ['failed', 'protocol_failed', 'invariant_failed', 'unavailable'].includes(item.status));

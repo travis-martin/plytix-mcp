@@ -1,6 +1,6 @@
 {
   "name": "plytix-mcp",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "type": "module",
   "description": "Read-only by default MCP tools for Plytix product data, schema, assets and relationships.",
   "keywords": [

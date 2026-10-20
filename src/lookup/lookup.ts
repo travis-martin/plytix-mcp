@@ -486,7 +486,10 @@ export class PlytixLookup {
           value: firstToken,
         }));
 
-        const broadResults = await executeSearch({ filters: [broadFilters] }, 'broad_like_search');
+        const broadResults = await executeSearch(
+          { filters: broadFilters.map(filter => [filter]) },
+          'broad_like_search'
+        );
         matches.push(...broadResults);
       } catch (error) {
         if (!(error instanceof PlytixError) || (error.status !== 400 && error.status !== 404 && error.status !== 422)) throw error;
@@ -494,7 +497,18 @@ export class PlytixLookup {
       }
     }
 
-    // Sort by confidence and select best
+    // Different strategies can find the same product. Retain its strongest
+    // evidence so repeated matches do not create a false ambiguity.
+    const uniqueMatches = new Map<string, Match>();
+    for (const match of matches) {
+      const existing = uniqueMatches.get(match.id);
+      if (!existing || match.confidence > existing.confidence) {
+        uniqueMatches.set(match.id, match);
+      }
+    }
+    matches = [...uniqueMatches.values()];
+
+    // Sort distinct products by confidence and select best
     matches.sort((a, b) => b.confidence - a.confidence);
 
     const selected =

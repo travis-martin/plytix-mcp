@@ -104,6 +104,25 @@ describe('product tool contracts', () => {
     expect(searchProducts).not.toHaveBeenCalled();
   });
 
+  it('forwards product v2 relationship presence filters without rewriting groups', async () => {
+    const searchProducts = vi.fn().mockResolvedValue({ data: [] });
+    const tools = toolsFor(registerProductTools, { searchProducts });
+    const relationship_filters = [[{ relationship_id: 'related-parts', operator: '!exists' }]];
+    const filters = [[{ field: 'status', operator: 'eq', value: 'Completed' }]];
+    await tools.call('products_search', { relationship_filters, filters });
+    expect(searchProducts).toHaveBeenCalledWith({ relationship_filters, filters });
+  });
+
+  it('rejects relationship filters for different relationship IDs before searching', async () => {
+    const searchProducts = vi.fn();
+    const tools = toolsFor(registerProductTools, { searchProducts });
+    await expect(tools.call('products_search', { relationship_filters: [
+      [{ relationship_id: 'related-parts', operator: 'exists' }],
+      [{ relationship_id: 'substitutes', operator: '!exists' }],
+    ] })).rejects.toThrow('Relationship filters must reference a single relationship_id.');
+    expect(searchProducts).not.toHaveBeenCalled();
+  });
+
   it('does not claim variant creation succeeded without a returned ID', async () => {
     const tools = toolsFor(registerVariantTools, { createVariant: vi.fn().mockResolvedValue({ data: [] }) });
     const result = await tools.call('variants_create', { parent_product_id: 'p', sku: 'V' });
@@ -156,7 +175,7 @@ describe('relationship mutation readback', () => {
 it('explains public API gaps without making upstream requests', async () => {
   const tools = toolsFor(registerCapabilityTools);
   const result = await tools.call('server_capabilities');
-  expect(result.json.versions.products).toContain('beta');
+  expect(result.json.versions.products).toContain('v2 preferred');
   expect(result.json.limitations.channels).toContain('does not document');
   expect(result.json.limitations.product_lists).toContain('No product-list management endpoint');
 });

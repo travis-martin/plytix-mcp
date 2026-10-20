@@ -22,6 +22,10 @@
 - HTTP creates a fresh Plytix client per request. JWT and schema caches never
   cross request credential boundaries. Regression coverage specifically rejects a
   wrong password with a previously successful key. Stdio caches are instance-local.
+- Identical reads within one tool invocation share an upstream request and return
+  independent copies. This cache is cleared after the invocation and before any
+  mutation, never reused for stale post-write verification. Errors are not cached;
+  cancellation and deadlines are checked even when a read is already cached.
 - Disallowed Origin and Host values are rejected before parsing/executing tools.
   Origin omission is allowed for non-browser MCP clients; it does not bypass
   remote service authentication. CORS never acts as authentication.

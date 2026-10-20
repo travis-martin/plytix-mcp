@@ -8,16 +8,26 @@ checks, not evidence that a particular account can execute every operation.
 
 ## Versions
 
-Plytix still labels the product v2 API **open beta**. This server uses v2 for
-documented product operations and v1 for schema, families, relationships,
-categories, and account assets. Variant listing uses the documented
+Product v2 is preferred for supported product operations. Its lightweight
+responses avoid unnecessarily expanding linked assets and categories. This server
+uses v2 for product reads, searches, relationship operations, and other supported
+product writes, and v1 for schema, families, relationship definitions, taxonomy,
+and account assets. Variant listing uses the documented
 `GET /api/v1/products/{id}/variants`; the current v2 reference does not define a
-corresponding GET route. There is no justified blanket upgrade of all paths to v2.
+corresponding GET route. The reference's beta label is informational, not a
+reason to avoid useful v2 operations.
 
 Product v2 reads can return asset/category IDs instead of hydrated objects.
 `products_get_full`, `assets_list`, and `categories_list` retrieve related data
 separately. V2 create/update responses may contain only IDs and audit timestamps;
 they are not full product snapshots.
+
+`products_get_full` accepts `include` with any of `family`, `variants`,
+`categories`, and `assets`. Omission preserves the original full expansion;
+`include: []` reads only the product. Unrequested sections are omitted.
+Identical reads within one tool invocation share one upstream request; this
+deduplication expires at the end of the invocation and is cleared before a write,
+so mutation readback is fresh.
 
 ## Discovery contracts
 
@@ -49,6 +59,10 @@ the needed `attributes`. Otherwise some endpoints return IDs with little useful
 context. Conditions inside a filter group are **AND**; groups are **OR**.
 Sorting belongs in `pagination.order`, with a leading `-` for descending order.
 Discover allowed operators for each field instead of assuming all operators apply.
+`products_search.relationship_filters` supports OR-of-AND groups containing
+`{relationship_id, operator: "exists" | "!exists"}`. All conditions must refer
+to one relationship ID, obtained from `relationships_search`. This intentionally
+small subset covers presence/absence; quantity constraints are not exposed yet.
 
 Attribute projections include `name`, `label`, `type_class`, `groups`, `options`,
 and `attributes`. For a CompletenessAttribute, the latter field contains member
@@ -61,6 +75,31 @@ with product parent IDs and `overwritten_attributes` to investigate inheritance.
 Identical parent/variant values alone do not establish inheritance. Attribute
 purpose must be grounded in available metadata and actual usage; the public schema
 does not guarantee a business-description field.
+
+## Restricted metadata
+
+Live checks confirmed that direct family detail and asset taxonomy search return
+HTTP 403 with a permission-denied response for the current connection. The same
+credentials can read other product, family and asset information.
+
+- `families_get` recovers matching metadata through documented family search
+  filtered by exact ID. Its `_retrieval` metadata states the source and that
+  additional detail fields may be unavailable. `families_inspect` and
+  `products_get_full` preserve this provenance and partial status. Other error
+  statuses, mismatched IDs and empty results are not disguised as successful
+  fallback data.
+- `asset_categories_search` can fall back to IDs exposed by `assets_filters`.
+  It returns `categories: null`, `partial: true`, a separate paged
+  `available_category_ids` list, and explicit unapplied query/order flags.
+  Names and hierarchy are still unavailable. These IDs are not claimed to be
+  name-filtered taxonomy results or proof of a complete hierarchy.
+
+[Plytix's permissions documentation](https://help.plytix.com/en/team-roles/permissions)
+distinguishes ordinary asset View/Edit access from Asset Category settings,
+which offer Edit/None. [API key roles](https://help.plytix.com/en/api) control API
+access using those role permissions. This explains a possible cause; the exact
+role assignments were not inspected or changed. Full taxonomy access requires
+an owner review of the intended API role, not an undocumented endpoint.
 
 ## Mutation contracts
 
