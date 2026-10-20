@@ -124,6 +124,15 @@ export function registerVariantTools(server: McpServer, client: PlytixClient) {
           ...(attributes !== undefined ? { attributes } : {}),
         });
         const variant = result.data?.[0];
+        if (!variant?.id) {
+          return {
+            content: [{
+              type: 'text',
+              text: 'The API accepted variant creation but returned no variant ID. Inspect the parent product before retrying.',
+            }],
+            isError: true,
+          };
+        }
 
         return {
           content: [
@@ -134,9 +143,7 @@ export function registerVariantTools(server: McpServer, client: PlytixClient) {
                   success: true,
                   action: 'created',
                   parent_product_id,
-                  variant: variant
-                    ? { id: variant.id, sku: variant.sku, label: variant.label }
-                    : undefined,
+                  variant: { id: variant.id, sku: variant.sku ?? sku, label: variant.label ?? label },
                 },
                 null,
                 2

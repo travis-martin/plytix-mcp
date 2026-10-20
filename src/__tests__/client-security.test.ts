@@ -44,7 +44,8 @@ describe('Plytix API security boundaries', () => {
   it.each([401, 429, 503])('never retries a write after HTTP %s', async (status) => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(auth())
       .mockResolvedValueOnce(new Response('secret', { status, headers: { 'Retry-After': '0' } }));
-    await expect(new PlytixClient({ ...credentials, allowWrites: true }).createProduct({ sku: 'fixture' })).rejects.toThrow(`HTTP ${status}`);
+    const client = new PlytixClient({ ...credentials, allowWrites: true, writeTools: new Set(['products_create']) });
+    await expect(client.runOperation(() => client.createProduct({ sku: 'fixture' }), undefined, 'products_create')).rejects.toThrow(`HTTP ${status}`);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
@@ -89,25 +90,11 @@ describe('Plytix API security boundaries', () => {
     await expect(lookup.findProducts({ sku: 'fixture-sku' })).rejects.toThrow('authentication failed');
   });
 
-  it('bounds metadata pagination and detail concurrency and rejects incomplete schema', async () => {
+  it('bounds metadata pagination without claiming a truncated schema is complete', async () => {
     const client = new PlytixClient(credentials);
     vi.spyOn(globalThis, 'fetch').mockImplementation(async url => String(url).includes('/auth/') ? auth() :
       Response.json({ data: Array.from({ length: 100 }, (_, i) => ({ id: String(i) })) }));
     await expect(client.searchAttributeIds()).rejects.toThrow('five-page limit');
-    vi.restoreAllMocks();
-    vi.spyOn(client, 'searchAttributeIds').mockResolvedValue(Array.from({ length: 25 }, (_, i) => String(i)));
-    let active = 0, peak = 0;
-    vi.spyOn(client, 'getAttributeById').mockImplementation(async id => {
-      peak = Math.max(peak, ++active);
-      await new Promise(resolve => setTimeout(resolve, 1)); active--;
-      return { id, label: `field_${id}`, name: id, type_class: 'TextAttribute' };
-    });
-    await expect(client.getAttributeByLabel('field_24')).resolves.toMatchObject({ id: '24' });
-    expect(peak).toBe(4);
-    const failing = new PlytixClient(credentials);
-    vi.spyOn(failing, 'searchAttributeIds').mockResolvedValue(['1']);
-    vi.spyOn(failing, 'getAttributeById').mockRejectedValue(new Error('fixture failure'));
-    await expect(failing.getAttributeByLabel('missing')).rejects.toThrow('fixture failure');
   });
 
   it('bounds each operation and cancellation stops future requests', async () => {
@@ -121,18 +108,18 @@ describe('Plytix API security boundaries', () => {
     await expect(client.getProduct('fixture')).rejects.toThrow('cancelled');
   });
 
-  it('discovers 250 attributes through real client requests within the operation budget', async () => {
-    vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
+  it('resolves one label in two requests instead of hydrating the entire account', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async (url, init) => {
       if (String(url).includes('/auth/')) return auth();
       if (String(url).endsWith('/search')) {
-        const page = JSON.parse(String(init?.body)).pagination.page;
-        const start = (page - 1) * 100;
-        return Response.json({ data: Array.from({ length: Math.min(100, 250 - start) }, (_, i) => ({ id: String(start + i) })) });
+        expect(JSON.parse(String(init?.body)).filters).toEqual([[{ field: 'label', operator: 'eq', value: 'field_249' }]]);
+        return Response.json({ data: [{ id: '249', label: 'field_249' }] });
       }
-      const id = String(url).split('/').at(-1)!;
-      return Response.json({ data: [{ id, label: `field_${id}`, name: id, type_class: 'TextAttribute' }] });
+      return Response.json({ data: [{ id: '249', label: 'field_249', name: 'Field', type_class: 'TextAttribute' }] });
     });
     const client = new PlytixClient(credentials);
+    await expect(client.runOperation(() => client.getAttributeByLabel('attributes.field_249'))).resolves.toMatchObject({ id: '249' });
     await expect(client.runOperation(() => client.getAttributeByLabel('field_249'))).resolves.toMatchObject({ id: '249' });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 });

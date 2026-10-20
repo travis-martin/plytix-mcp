@@ -9,6 +9,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
 import { registerTool } from './register.js';
+import { stripAttributesPrefix } from '../utils/attribute-labels.js';
 
 export function registerAttributeTools(server: McpServer, client: PlytixClient) {
   // ─────────────────────────────────────────────────────────────
@@ -20,7 +21,7 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
     'attributes_list',
     {
       title: 'List Attributes',
-      description: 'List product attributes.',
+      description: 'List searchable product fields and allowed options. Use attributes_search for full schema, groups, and completeness definitions.',
       inputSchema: {
         include_options: z
           .boolean()
@@ -35,10 +36,11 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
         const result: Record<string, unknown> = {
           system_attributes: system,
           custom_attributes: custom.map((attr) => ({
+            ...attr,
             key: attr.key ?? attr.field,
             label: attr.label,
             type: attr.filter_type ?? attr.type,
-            ...(include_options && attr.options ? { options: attr.options } : {}),
+            options: include_options ? attr.options : undefined,
           })),
           summary: {
             system_count: system.length,
@@ -73,7 +75,7 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
     'attributes_get',
     {
       title: 'Get Attribute',
-      description: 'Get one attribute.',
+      description: 'Get attribute metadata by label, including options, groups, and completeness components when returned by the API.',
       inputSchema: {
         label: z
           .string()
@@ -82,7 +84,9 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
     },
     async ({ label }) => {
       try {
-        const attr = await client.getAttributeByLabel(label);
+        const normalizedLabel = stripAttributesPrefix(label);
+        if (!normalizedLabel) throw new Error('Attribute label cannot be empty');
+        const attr = await client.getAttributeByLabel(normalizedLabel);
 
         if (!attr) {
           return {
@@ -97,14 +101,12 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
               type: 'text',
               text: JSON.stringify(
                 {
-                  id: attr.id,
-                  label: attr.label,
-                  name: attr.name,
-                  type_class: attr.type_class,
+                  ...attr,
+                  search_key: `attributes.${attr.label}`,
                   options: attr.options ?? [],
                   options_count: attr.options?.length ?? 0,
                   groups: attr.groups ?? [],
-                  description: attr.description,
+                  metadata_source: 'Plytix attribute API',
                 },
                 null,
                 2
@@ -144,7 +146,9 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
     },
     async ({ label }) => {
       try {
-        const options = await client.getAttributeOptions(label);
+        const normalizedLabel = stripAttributesPrefix(label);
+        if (!normalizedLabel) throw new Error('Attribute label cannot be empty');
+        const options = await client.getAttributeOptions(normalizedLabel);
 
         if (options === null) {
           return {
@@ -159,7 +163,7 @@ export function registerAttributeTools(server: McpServer, client: PlytixClient) 
               type: 'text',
               text: JSON.stringify(
                 {
-                  label,
+                  label: normalizedLabel,
                   options,
                   count: options.length,
                 },

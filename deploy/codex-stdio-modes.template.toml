@@ -1,0 +1,24 @@
+# Template only. Replace the absolute path and enable only intended connections.
+# Supply PLYTIX_API_KEY and PLYTIX_API_PASSWORD through the local environment;
+# never paste credential values into a shared template or chat.
+# A compatible host must show MCP form elicitation to a human for every write.
+
+[mcp_servers.plytix_readonly]
+command = "node"
+args = ["C:/ABSOLUTE/PATH/plytix-mcp/dist/index.js"]
+enabled = false
+default_tools_approval_mode = "prompt"
+
+[mcp_servers.plytix_readonly.env]
+PLYTIX_WRITE_TOOLS = "[]"
+
+[mcp_servers.plytix_approved_writes]
+command = "node"
+args = ["C:/ABSOLUTE/PATH/plytix-mcp/dist/index.js"]
+enabled = false
+default_tools_approval_mode = "prompt"
+tool_timeout_sec = 90
+
+[mcp_servers.plytix_approved_writes.env]
+# Example minimum allowlist; review the exact tool before enabling.
+PLYTIX_WRITE_TOOLS = '["products_set_attribute"]'

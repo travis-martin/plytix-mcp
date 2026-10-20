@@ -1,10 +1,11 @@
 import { createHash, timingSafeEqual } from 'node:crypto';
-import type { ErrorRequestHandler } from 'express';
+import type { ErrorRequestHandler, Request } from 'express';
 import express from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { PlytixClient } from './client.js';
 import { createServer } from './server.js';
 import { parseWriteTools } from './policy.js';
+import type { WriteApprovalProvider } from './tools/register.js';
 
 export interface HttpConfig {
   host: string;
@@ -14,23 +15,60 @@ export interface HttpConfig {
   writeTools: ReadonlySet<string>;
   requestsPerMinute?: number;
   maxConcurrentRequests?: number;
+  /** Trusted embedding only. The standalone HTTP entry point supplies no approval provider. */
+  requestWriteApproval?: (
+    approval: Parameters<WriteApprovalProvider>[0],
+    server: Parameters<WriteApprovalProvider>[1],
+    httpRequest: Request,
+  ) => Promise<boolean>;
 }
 export function loadHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig {
   const host = env.HOST ?? (env.K_SERVICE ? '0.0.0.0' : '127.0.0.1');
   return {
     host,
-    allowedHosts: (env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1,[::1]').split(',').filter(Boolean),
-    allowedOrigins: (env.MCP_ALLOWED_ORIGINS ?? '').split(',').filter(Boolean),
+    allowedHosts: (env.MCP_ALLOWED_HOSTS ?? 'localhost,127.0.0.1,[::1]').split(',').map(value => value.trim().toLowerCase()).filter(Boolean),
+    allowedOrigins: (env.MCP_ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
     authToken: env.MCP_AUTH_TOKEN,
     writeTools: parseWriteTools(env.PLYTIX_WRITE_TOOLS),
   };
 }
 const digest = (value: string) => createHash('sha256').update(value).digest();
+const securityHeaders = new Set([
+  'host', 'origin', 'authorization', 'x-mcp-token', 'x-plytix-api-key', 'x-plytix-api-password',
+  'mcp-session-id', 'mcp-protocol-version',
+]);
+function hasDuplicateSecurityHeaders(req: Request): boolean {
+  const seen = new Set<string>();
+  for (let i = 0; i < req.rawHeaders.length; i += 2) {
+    const name = req.rawHeaders[i].toLowerCase();
+    if (!securityHeaders.has(name)) continue;
+    if (seen.has(name)) return true;
+    seen.add(name);
+  }
+  return false;
+}
 
-export function createHttpApp(config: HttpConfig) {
+export function createHttpApp(input: HttpConfig) {
+  // Snapshot operator policy so later mutation of input sets cannot broaden access.
+  const config = { ...input, writeTools: new Set(input.writeTools),
+    allowedHosts: input.allowedHosts.map(host => host.toLowerCase()), allowedOrigins: [...input.allowedOrigins] };
+  parseWriteTools(JSON.stringify([...config.writeTools]));
   const loopback = ['127.0.0.1', '::1', 'localhost'].includes(config.host);
   if ((!loopback || config.writeTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
     throw new Error('Remote access or write tools require MCP_AUTH_TOKEN of at least 32 characters');
+  }
+  if (!config.allowedHosts.length || config.allowedHosts.some(host =>
+    !/^(?:[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?|\[[a-f0-9:]+\])$/.test(host))) {
+    throw new Error('MCP_ALLOWED_HOSTS must contain exact hostnames without ports or wildcards');
+  }
+  for (const origin of config.allowedOrigins) {
+    try {
+      const url = new URL(origin);
+      if (!['https:', 'http:'].includes(url.protocol) || url.origin !== origin) throw new Error();
+    } catch { throw new Error('MCP_ALLOWED_ORIGINS must contain exact HTTP or HTTPS origins'); }
+  }
+  for (const value of [config.requestsPerMinute ?? 60, config.maxConcurrentRequests ?? 4]) {
+    if (!Number.isSafeInteger(value) || value < 1) throw new Error('HTTP request limits must be positive integers');
   }
   const app = express();
   app.disable('x-powered-by');
@@ -38,9 +76,10 @@ export function createHttpApp(config: HttpConfig) {
   let count = 0, windowStart = Date.now(), active = 0;
   app.use((req, res, next) => {
     res.setHeader('Cache-Control', 'no-store');
+    if (hasDuplicateSecurityHeaders(req)) { res.sendStatus(400); return; }
     const host = req.headers.host;
     // Match an exact hostname, with an optional numeric port. Ignore forwarded headers.
-    const hostname = host?.replace(/:\d+$/, '');
+    const hostname = host?.toLowerCase().replace(/:\d+$/, '');
     if (!hostname || !config.allowedHosts.includes(hostname)) { res.sendStatus(403); return; }
     const origin = req.headers.origin;
     if (origin && !config.allowedOrigins.includes(origin)) { res.sendStatus(403); return; }
@@ -81,9 +120,13 @@ export function createHttpApp(config: HttpConfig) {
       res.status(401).json({ error: 'Plytix credential headers are required' }); return;
     }
     // Each HTTP request owns its client, token and metadata caches. No cross-credential reuse.
-    const client = new PlytixClient({ apiKey, apiPassword, allowWrites: config.writeTools.size > 0 });
+    const client = new PlytixClient({ apiKey, apiPassword, allowWrites: config.writeTools.size > 0, writeTools: config.writeTools });
     res.locals.plytixClient = client;
-    const server = createServer(client, config.writeTools);
+    const server = createServer(client, config.writeTools, {
+      requestWriteApproval: config.requestWriteApproval
+        ? (approval, mcpServer) => config.requestWriteApproval!(approval, mcpServer, req)
+        : undefined,
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.once('close', () => { void transport.close(); void server.close(); });
     try {

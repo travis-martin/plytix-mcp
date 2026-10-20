@@ -11,7 +11,9 @@ it('honors SDK cancellation before a pending write and permits the next stdio op
   const pending = new Promise<void>(resolve => { release = resolve; });
   let entered!: () => void;
   const started = new Promise<void>(resolve => { entered = resolve; });
-  const api = new PlytixClient({ apiKey: 'fixture', apiPassword: 'fixture', allowWrites: true });
+  const api = new PlytixClient({
+    apiKey: 'fixture', apiPassword: 'fixture', allowWrites: true, writeTools: new Set(['products_set_attribute']),
+  });
   vi.spyOn(api, 'getAttributeByLabel').mockImplementation(async () => {
     entered(); await pending;
     return { id: 'fixture-field', label: 'field', name: 'Field', type_class: 'TextAttribute' };
@@ -20,7 +22,7 @@ it('honors SDK cancellation before a pending write and permits the next stdio op
     if (String(url).includes('/auth/')) return Response.json({ data: [{ access_token: 'fixture', expires_in: 900 }] });
     return Response.json({ data: [{ id: 'fixture', sku: 'FIXTURE' }] });
   });
-  const server = createServer(api, new Set(['products_set_attribute']));
+  const server = createServer(api, new Set(['products_set_attribute']), { requestWriteApproval: async () => true });
   const client = new Client({ name: 'fixture-stdio-cancel', version: '1' });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport); await client.connect(clientTransport);

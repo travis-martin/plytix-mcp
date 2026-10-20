@@ -121,6 +121,38 @@ authenticated integration that presents Cloud Run identity plus required
 application/Plytix headers, or a separately reviewed OAuth/gateway design. No such
 integration has been verified, and no OAuth grants are authorized by this plan.
 
+## Read-only and approved-write connections
+
+Use one implementation with two named connections or separately configured
+services. The read-only connection fixes `PLYTIX_WRITE_TOOLS=[]`; the approved-write
+connection uses the smallest reviewed list of tool names and appropriately scoped
+Plytix credentials. A read-only connection must retain its empty allowlist even
+when the same operator also has a write connection.
+
+Local stdio supports per-invocation approval through MCP form elicitation: the
+host must show the exact arguments and return the user's typed `APPROVE`.
+Unsupported hosts, rejection, cancellation and timeout all fail closed. The
+[stdio connection template](../deploy/codex-stdio-modes.template.toml) illustrates
+the separation without credential values. Fixture verification covers the
+protocol exchange; no live write or actual host approval UI was tested.
+Allow at least 90 seconds for the write client's tool call: approval may take
+30 seconds and approved execution receives its own 45-second budget.
+
+The standalone HTTP service remains read-only in practice: selected writes can
+be listed by configuration, but they cannot execute without a trusted embedding
+application's approval provider. Do not equate the application service token
+with user approval. A future cloud write service needs authenticated per-user
+authorization, account-bound credentials and exact-action approvals before
+enabling writes. Hosted-client OAuth compatibility, durable audit/replay controls
+and cancellation behavior must be verified as part of that deployment. See
+[write enforcement and approval](security.md#before-allowing-writes).
+The current 60-second service timeout is suitable for the read-only deployment
+plan. A write gateway, its client and upstream proxies must allow at least
+90 seconds; review that configuration with the future write deployment.
+
+No cloud write deployment, credential creation, permission grant or public access
+change is authorized by this local implementation.
+
 ## Verification after approved deployment
 
 Verify private IAM, zero minimum instances, maximum one, selected resources,

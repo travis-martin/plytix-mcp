@@ -9,6 +9,30 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
 import { registerTool } from './register.js';
 
+async function verifyRelationship(
+  client: PlytixClient,
+  productId: string,
+  relationshipId: string,
+  relatedProductId: string,
+  expected: 'linked' | 'unlinked',
+  quantity?: number,
+) {
+  try {
+    const product = (await client.getProduct(productId)).data?.[0];
+    if (!Array.isArray(product?.relationships)) return 'not_verified';
+    const relationship = product.relationships.find(row => row.relationship_id === relationshipId);
+    const related = relationship?.related_products?.find(row => row.product_id === relatedProductId);
+    if (expected === 'unlinked') {
+      if (relationship && !Array.isArray(relationship.related_products)) return 'not_verified';
+      return related ? 'not_verified' : 'verified';
+    }
+    return related && (quantity === undefined || related.quantity === quantity) ? 'verified' : 'not_verified';
+  } catch {
+    // A failed readback does not mean the preceding write failed; do not encourage a retry.
+    return 'not_verified';
+  }
+}
+
 export function registerRelationshipTools(server: McpServer, client: PlytixClient) {
   // ─────────────────────────────────────────────────────────────
   // relationships_get - Get one relationship definition
@@ -64,7 +88,7 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
       title: 'Search Relationships',
       description: 'Search relationship definitions.',
       inputSchema: {
-        query: z.string().optional().describe('Search query to filter relationships by label'),
+        query: z.string().optional().describe('Search query to filter relationships by display name'),
         pagination: z
           .object({
             page: z.number().int().positive().optional(),
@@ -77,8 +101,9 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
     async ({ query, pagination }) => {
       try {
         const result = await client.searchRelationships({
+          attributes: ['name', 'label', 'symmetrical', 'modified'],
+          filters: query ? [[{ field: 'name', operator: 'like', value: query }]] : [],
           ...(pagination !== undefined ? { pagination } : {}),
-          ...(query ? { filters: [[{ field: 'label', operator: 'like', value: query }]] } : {}),
         });
 
         return {
@@ -140,6 +165,9 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
             ...(quantity !== undefined ? { quantity } : {}),
           },
         ]);
+        const verification = await verifyRelationship(
+          client, product_id, relationship_id, related_product_id, 'linked', quantity,
+        );
 
         return {
           content: [
@@ -147,7 +175,11 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
               type: 'text',
               text: JSON.stringify(
                 {
-                  success: true,
+                  accepted: true,
+                  verification,
+                  ...(verification === 'not_verified' ? {
+                    note: 'API accepted the request, but readback did not confirm the requested relationship. Inspect before retrying; nonexistent products can be silently ignored.',
+                  } : {}),
                   action: 'linked',
                   product_id,
                   relationship_id,
@@ -197,6 +229,9 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
     async ({ product_id, relationship_id, related_product_id }) => {
       try {
         await client.unlinkProductRelationship(product_id, relationship_id, [related_product_id]);
+        const verification = await verifyRelationship(
+          client, product_id, relationship_id, related_product_id, 'unlinked',
+        );
 
         return {
           content: [
@@ -204,7 +239,11 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
               type: 'text',
               text: JSON.stringify(
                 {
-                  success: true,
+                  accepted: true,
+                  verification,
+                  ...(verification === 'not_verified' ? {
+                    note: 'API accepted the request, but readback did not confirm removal. Inspect before retrying.',
+                  } : {}),
                   action: 'unlinked',
                   product_id,
                   relationship_id,
@@ -258,6 +297,9 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
         await client.updateProductRelationship(product_id, relationship_id, [
           { product_id: related_product_id, quantity },
         ]);
+        const verification = await verifyRelationship(
+          client, product_id, relationship_id, related_product_id, 'linked', quantity,
+        );
 
         return {
           content: [
@@ -265,7 +307,11 @@ export function registerRelationshipTools(server: McpServer, client: PlytixClien
               type: 'text',
               text: JSON.stringify(
                 {
-                  success: true,
+                  accepted: true,
+                  verification,
+                  ...(verification === 'not_verified' ? {
+                    note: 'API accepted the request, but readback did not confirm the quantity. Inspect before retrying; unlinked products can be silently ignored.',
+                  } : {}),
                   action: 'quantity_updated',
                   product_id,
                   relationship_id,

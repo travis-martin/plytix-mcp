@@ -15,6 +15,9 @@ export const READ_TOOLS = new Set([
   'assets_get', 'assets_search', 'assets_list', 'categories_search', 'categories_list',
   'variants_list', 'relationships_get', 'relationships_search',
   'identifier_detect', 'identifier_normalize', 'match_score',
+  'asset_categories_search', 'server_capabilities',
+  'attributes_search', 'attribute_groups_search', 'attributes_profile_usage', 'families_inspect',
+  'products_inspect_inheritance',
 ]);
 
 export function parseWriteTools(value = '[]'): Set<string> {
@@ -31,7 +34,39 @@ const SEARCH_PATHS = new Set([
   '/api/v2/products/search', '/api/v1/product_families/search',
   '/api/v1/attributes/product/search', '/api/v1/assets/search',
   '/api/v1/categories/product/search', '/api/v1/relationships/search',
+  '/api/v1/categories/file/search',
+  '/api/v1/attribute-groups/product/search',
 ]);
 export function isReadRequest(endpoint: string, method = 'GET'): boolean {
   return method === 'GET' || (method === 'POST' && SEARCH_PATHS.has(endpoint));
+}
+
+// A tool's allowlist entry authorizes only the API routes needed by that tool.
+// In particular, an allowed update must never authorize a create/delete route.
+const WRITE_ROUTES: Record<string, { method: string; path: RegExp }> = {
+  products_create: { method: 'POST', path: /^\/api\/v2\/products$/ },
+  products_update: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
+  products_set_attribute: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
+  products_clear_attribute: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
+  products_assign_family: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/family$/ },
+  families_create: { method: 'POST', path: /^\/api\/v1\/product_families$/ },
+  families_link_attribute: { method: 'POST', path: /^\/api\/v1\/product_families\/[^/]+\/attributes\/link$/ },
+  families_unlink_attribute: { method: 'POST', path: /^\/api\/v1\/product_families\/[^/]+\/attributes\/unlink$/ },
+  assets_update: { method: 'PATCH', path: /^\/api\/v1\/assets\/[^/]+$/ },
+  assets_link: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/assets$/ },
+  assets_unlink: { method: 'DELETE', path: /^\/api\/v2\/products\/[^/]+\/assets\/[^/]+$/ },
+  categories_link: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/categories$/ },
+  categories_unlink: { method: 'DELETE', path: /^\/api\/v2\/products\/[^/]+\/categories\/[^/]+$/ },
+  variants_create: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/variants$/ },
+  variants_link: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/variant\/[^/]+$/ },
+  variants_unlink: { method: 'DELETE', path: /^\/api\/v2\/products\/[^/]+\/variant\/[^/]+$/ },
+  variants_resync: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/variants\/resync$/ },
+  relationships_link_product: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/relationships\/[^/]+$/ },
+  relationships_unlink_product: { method: 'DELETE', path: /^\/api\/v2\/products\/[^/]+\/relationships\/[^/]+$/ },
+  relationships_set_quantity: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+\/relationships\/[^/]+$/ },
+};
+
+export function isWriteRequestForTool(toolName: string, endpoint: string, method: string): boolean {
+  const route = Object.prototype.hasOwnProperty.call(WRITE_ROUTES, toolName) ? WRITE_ROUTES[toolName] : undefined;
+  return route !== undefined && route.method === method && route.path.test(endpoint);
 }

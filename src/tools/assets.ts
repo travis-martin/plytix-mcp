@@ -7,23 +7,9 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
-import type { FilterOperator } from '../types.js';
+import type { PlytixSearchBody } from '../types.js';
 import { registerTool } from './register.js';
-
-const filterOperatorSchema = z.enum([
-  'eq',
-  '!eq',
-  'like',
-  'in',
-  '!in',
-  'gt',
-  'gte',
-  'lt',
-  'lte',
-  'exists',
-  '!exists',
-  'text_search',
-]);
+import { filterSchema } from '../utils/search-schema.js';
 
 export function registerAssetTools(server: McpServer, client: PlytixClient) {
   // GET single asset by ID
@@ -32,7 +18,7 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
     'assets_get',
     {
       title: 'Get Asset',
-      description: 'Get one asset by ID.',
+      description: 'Get an asset with its available metadata, categories, usage counts, URLs, and alt text.',
       inputSchema: {
         asset_id: z.string().min(1).describe('The asset ID'),
       },
@@ -68,7 +54,8 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
 
   // SEARCH assets
   registerTool<{
-    filters?: Array<Array<{ field: string; operator: FilterOperator; value?: unknown }>>;
+    attributes?: string[];
+    filters?: PlytixSearchBody['filters'];
     pagination?: { page?: number; page_size?: number; order?: string };
     sort?: unknown;
   }>(
@@ -76,18 +63,12 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
     'assets_search',
     {
       title: 'Search Assets',
-      description: 'Search assets.',
+      description: 'Search assets and select metadata fields. Use assets_filters to discover valid fields and operators.',
       inputSchema: {
+        attributes: z.array(z.string().min(1)).max(50).optional()
+          .describe('Metadata fields to return, such as filename, alt_text, categories, url, content_type, file_size, or n_products.'),
         filters: z
-          .array(
-            z.array(
-              z.object({
-                field: z.string(),
-                operator: filterOperatorSchema,
-                value: z.unknown().optional(),
-              })
-            )
-          )
+          .array(z.array(filterSchema))
           .optional()
           .describe('Search filters in Plytix OR-of-ANDs format'),
         pagination: z
@@ -101,9 +82,10 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
         sort: z.unknown().optional().describe('Optional sort payload'),
       },
     },
-    async ({ filters, pagination, sort }) => {
+    async ({ attributes, filters, pagination, sort }) => {
       try {
         const result = await client.searchAssets({
+          ...(attributes !== undefined ? { attributes } : {}),
           ...(filters !== undefined ? { filters } : {}),
           ...(pagination !== undefined ? { pagination } : {}),
           ...(sort !== undefined ? { sort } : {}),
@@ -138,27 +120,63 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
     }
   );
 
-  // UPDATE asset metadata (filename and categories only)
-  registerTool<{ asset_id: string; filename?: string; categories?: string[] }>(
+  registerTool<{ query?: string; pagination?: { page?: number; page_size?: number; order?: string } }>(
+    server,
+    'asset_categories_search',
+    {
+      title: 'Search Asset Categories',
+      description: 'Find asset categories with their hierarchy paths, parent IDs, child counts, and ordering.',
+      inputSchema: {
+        query: z.string().optional().describe('Optional category name contains filter'),
+        pagination: z.object({
+          page: z.number().int().positive().optional(),
+          page_size: z.number().int().positive().max(100).optional(),
+          order: z.string().optional().describe('Field to sort by; prefix with - for descending'),
+        }).optional(),
+      },
+    },
+    async ({ query, pagination }) => {
+      try {
+        const result = await client.searchAssetCategories({
+          attributes: ['name', 'path', 'parents_ids', 'n_children', 'order'],
+          filters: query ? [[{ field: 'name', operator: 'like', value: query }]] : [],
+          pagination,
+        });
+        return { content: [{ type: 'text', text: JSON.stringify({
+          categories: result.data,
+          pagination: result.pagination,
+        }, null, 2) }] };
+      } catch (error) {
+        return {
+          content: [{ type: 'text', text: `Error searching asset categories: ${error instanceof Error ? error.message : 'Unknown error'}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  // UPDATE documented writable asset metadata.
+  registerTool<{ asset_id: string; filename?: string; categories?: string[]; alt_text?: string }>(
     server,
     'assets_update',
     {
       title: 'Update Asset',
-      description: 'Update asset filename or categories.',
+      description: 'Update asset filename, categories, or alternative text. Filename extensions cannot be changed.',
       inputSchema: {
         asset_id: z.string().min(1).describe('The asset ID'),
         filename: z.string().optional().describe('New filename for the asset'),
         categories: z.array(z.string()).optional().describe('Category IDs to assign to the asset'),
+        alt_text: z.string().max(512).optional().describe('Alternative description, up to 512 characters. Empty string clears it.'),
       },
     },
-    async ({ asset_id, filename, categories }) => {
+    async ({ asset_id, filename, categories, alt_text }) => {
       try {
-        if (filename === undefined && categories === undefined) {
+        if (filename === undefined && categories === undefined && alt_text === undefined) {
           return {
             content: [
               {
                 type: 'text',
-                text: 'Error updating asset: provide at least one of filename or categories',
+                text: 'Error updating asset: provide at least one of filename, categories, or alt_text',
               },
             ],
             isError: true,
@@ -168,6 +186,7 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
         await client.updateAsset(asset_id, {
           ...(filename !== undefined ? { filename } : {}),
           ...(categories !== undefined ? { categories } : {}),
+          ...(alt_text !== undefined ? { alt_text } : {}),
         });
 
         return {
@@ -181,6 +200,7 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
                   asset_id,
                   ...(filename !== undefined ? { filename } : {}),
                   ...(categories !== undefined ? { categories } : {}),
+                  ...(alt_text !== undefined ? { alt_text } : {}),
                 },
                 null,
                 2
@@ -234,19 +254,19 @@ export function registerAssetTools(server: McpServer, client: PlytixClient) {
   );
 
   // LINK asset to product
-  registerTool<{ product_id: string; asset_id: string; attribute_label?: string }>(
+  registerTool<{ product_id: string; asset_id: string; attribute_label: string }>(
     server,
     'assets_link',
     {
       title: 'Link Asset',
-      description: 'Link an asset to a product.',
+      description: 'Link an asset to an existing product media attribute or thumbnail. Replaces a single-media value; appends to a gallery.',
       inputSchema: {
         product_id: z.string().min(1).describe('The product ID'),
         asset_id: z.string().min(1).describe('The asset ID to link'),
         attribute_label: z
           .string()
-          .optional()
-          .describe('Optional media attribute label to assign the asset to'),
+          .min(1)
+          .describe('Required media attribute label or thumbnail'),
       },
     },
     async ({ product_id, asset_id, attribute_label }) => {

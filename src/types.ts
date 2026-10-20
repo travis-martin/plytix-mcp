@@ -6,11 +6,11 @@
 
 export type FilterOperator =
   | 'eq' | '!eq'
-  | 'like'
+  | 'like' | '!like'
   | 'in' | '!in'
   | 'gt' | 'gte' | 'lt' | 'lte'
   | 'exists' | '!exists'
-  | 'text_search';
+  | 'text_search' | 'last_days' | 'by_in' | '!by_in';
 
 export interface PlytixSearchFilter {
   field: string | string[];
@@ -32,8 +32,11 @@ export interface PlytixSearchBody {
 export interface PlytixPagination {
   page: number;
   page_size: number;
-  total: number;
-  pages: number;
+  total?: number;
+  pages?: number;
+  count?: number;
+  total_count?: number;
+  order?: string | null;
 }
 
 export interface PlytixResult<T = unknown> {
@@ -70,7 +73,7 @@ export interface RateLimitInfo {
 // Products
 // ─────────────────────────────────────────────────────────────
 
-export type ProductType = 'PARENT' | 'VARIANT' | 'STANDALONE';
+export type ProductType = 'PARENT' | 'VARIANT' | 'SUB_VARIANT' | 'SINGLE' | 'STANDALONE';
 
 export interface PlytixProduct {
   id: string;
@@ -87,7 +90,8 @@ export interface PlytixProduct {
   product_level?: number;
   product_type?: ProductType;
 
-  // Inheritance tracking - attributes explicitly set (not inherited from family)
+  _parent_id?: string;
+  // Explicit product overrides of parent-level inherited values.
   overwritten_attributes?: string[];
 
   // Relationships
@@ -134,7 +138,7 @@ export interface PlytixFamily {
   id: string;
   name: string;
   attributes?: string[];  // attribute labels linked to this family
-  parent_id?: string;     // parent family for inheritance
+  parent_id?: string;     // Preserve if returned; not a documented family hierarchy.
   created?: string;
   modified?: string;
   [key: string]: unknown;
@@ -147,7 +151,8 @@ export interface PlytixFamilyAttribute {
   type?: string;          // e.g., "dropdown", "text", "number"
   group?: string;         // attribute group
   required?: boolean;
-  inherited?: boolean;    // whether inherited from parent family
+  inherited?: boolean;
+  attribute_level?: 'parent_level' | 'variant_level' | 'no_level' | string;
   default_value?: unknown;
   options?: unknown[];    // for dropdown/multiselect types
   [key: string]: unknown;
@@ -163,6 +168,11 @@ export interface PlytixAsset {
   url: string;
   type: string;
   size?: number;
+  filename?: string;
+  alt_text?: string;
+  file_size?: number;
+  file_type?: string;
+  content_type?: string;
   categories?: string[];
   created?: string;
   modified?: string;
@@ -215,6 +225,16 @@ export interface PlytixAttributeDetail {
   filterable?: boolean;
   created?: string;
   modified?: string;
+  attributes?: Array<{ id: string | null; label: string }>;
+  [key: string]: unknown;
+}
+
+export interface PlytixAttributeGroup {
+  id: string;
+  name?: string;
+  order?: number | string;
+  attribute_labels?: string[];
+  [key: string]: unknown;
 }
 
 export interface PlytixFilterDefinition {
@@ -235,6 +255,7 @@ export interface PlytixFilterDefinition {
 
 export interface PlytixClientConfig {
   allowWrites?: boolean;
+  writeTools?: ReadonlySet<string>;
   apiKey: string;
   apiPassword: string;
   baseUrl?: string;

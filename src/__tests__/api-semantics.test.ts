@@ -1,5 +1,6 @@
 import { afterEach, expect, it, vi } from 'vitest';
 import { PlytixClient } from '../client.js';
+import { WRITE_TOOLS } from '../policy.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -10,15 +11,15 @@ it('preserves v1/v2 routes, methods and payloads for representative operations',
     apiCalls.push({ url: String(url), method: String(options?.method), body: options?.body ? JSON.parse(String(options.body)) : undefined });
     return Response.json({ data: [] });
   });
-  const client = new PlytixClient({ apiKey: 'fixture', apiPassword: 'fixture', allowWrites: true });
+  const client = new PlytixClient({ apiKey: 'fixture', apiPassword: 'fixture', allowWrites: true, writeTools: WRITE_TOOLS });
   await client.searchProducts({ pagination: { page: 1, page_size: 25 }, attributes: ['sku'] });
-  await client.updateProduct('product/fixture', { attributes: { field: null } });
-  await client.assignProductFamily('p', 'f');
-  await client.updateAsset('a', { filename: 'fixture.png', categories: ['c'] });
-  await client.linkProductCategory('p', 'c');
-  await client.linkProductAsset('p', 'a', 'image');
-  await client.linkProductRelationship('p', 'r', [{ product_id: 'other', quantity: 2 }]);
-  await client.resyncVariants('p', ['field'], ['variant']);
+  await client.runOperation(() => client.updateProduct('product/fixture', { attributes: { field: null } }), undefined, 'products_update');
+  await client.runOperation(() => client.assignProductFamily('p', 'f'), undefined, 'products_assign_family');
+  await client.runOperation(() => client.updateAsset('a', { filename: 'fixture.png', categories: ['c'] }), undefined, 'assets_update');
+  await client.runOperation(() => client.linkProductCategory('p', 'c'), undefined, 'categories_link');
+  await client.runOperation(() => client.linkProductAsset('p', 'a', 'image'), undefined, 'assets_link');
+  await client.runOperation(() => client.linkProductRelationship('p', 'r', [{ product_id: 'other', quantity: 2 }]), undefined, 'relationships_link_product');
+  await client.runOperation(() => client.resyncVariants('p', ['field'], ['variant']), undefined, 'variants_resync');
   expect(apiCalls).toEqual([
     { url: 'https://pim.plytix.com/api/v2/products/search', method: 'POST', body: { pagination: { page: 1, page_size: 25 }, attributes: ['sku'] } },
     { url: 'https://pim.plytix.com/api/v2/products/product%2Ffixture', method: 'PATCH', body: { attributes: { field: null } } },

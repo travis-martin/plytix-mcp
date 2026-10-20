@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { READ_TOOLS } from '../dist/policy.js';
 
 const image = process.argv[2] ?? 'plytix-mcp:local';
 const name = `plytix-mcp-fixture-${process.pid}`;
@@ -31,7 +32,7 @@ try {
     'X-MCP-Token': fixtureToken, 'X-Plytix-API-Key': 'fixture', 'X-Plytix-API-Password': 'fixture',
   } } }));
   const tools = (await client.listTools()).tools;
-  assert.equal(tools.length, 27);
+  assert.deepEqual(new Set(tools.map(tool => tool.name)), READ_TOOLS);
   assert.ok(tools.every(tool => tool.annotations?.readOnlyHint));
   const result = await client.callTool({ name: 'identifier_detect', arguments: { value: 'ABC-123' } });
   assert.notEqual(result.isError, true);

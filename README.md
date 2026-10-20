@@ -36,9 +36,11 @@ private environment configuration. HTTP uses `/mcp` and requires
 `X-Plytix-API-Key` and `X-Plytix-API-Password` on every request. HTTP never falls
 back to server-held Plytix credentials. `GET /health` checks the listener only.
 
-The official SDK client is tested over both transports. Actual Codex and hosted
-AI-client setup remains to be verified with approved credentials; no client
-connection or OAuth grant has been configured by this change.
+The official SDK client is tested over both transports. A fresh stdio SDK session
+has also exercised every read tool against the configured local account; see
+[validation evidence](docs/validation.md) for endpoint access restrictions.
+Reconnect an existing MCP session to load a newly built tool catalog. Hosted
+client authentication and human approval UI compatibility still need verification.
 
 ## Configuration
 
@@ -63,6 +65,43 @@ explicitly allowed even on loopback. Host checks ignore forwarded host headers.
 Writes require an explicit reviewed allowlist such as
 `["products_update"]`; this is configuration syntax, not approval to enable it.
 See [security and limitations](docs/security.md) before enabling any mutation.
+
+## Data discovery and approved writes
+
+Version 0.4 adds schema search, attribute groups, completeness definitions,
+bounded attribute value/option profiling, family inspection, product ancestry
+and inheritance evidence, asset categories, and an API capabilities guide.
+Existing asset tools expose metadata and alt text. Product and schema filters
+preserve the operators supplied by Plytix, including parent/variant properties.
+See [API coverage and limitations](docs/api-coverage.md) for the tool guide.
+
+The current official reference still labels product v2 as beta. Product reads
+use its lightweight responses; variant listing uses the documented v1 route.
+Schema, families, relationships definitions, and assets use v1. Channels, channel
+formulas, and product-list definitions have no documented public endpoints;
+the server reports those gaps instead of guessing private routes.
+
+Use the [two-connection template](deploy/codex-stdio-modes.template.toml) for
+separate read-only and explicitly allowlisted write connections. Every mutation
+also requires approval of its exact arguments through a trusted host callback.
+The stdio entry point uses MCP form elicitation and refuses writes when the host
+cannot present that form. Standalone HTTP writes remain blocked without a
+trusted approval integration. The HTTP server is prepared for private deployment;
+multi-user OAuth, account authorization and a cloud approval gateway remain
+separate work before sharing a write-enabled service.
+
+To repeat the opt-in live read checks with existing local credentials:
+
+```powershell
+npm run test:live:read
+```
+
+This launches a fresh MCP subprocess with writes forcibly disabled, discovers
+sample IDs from the account, and exercises every read tool. It prints tool
+statuses only, performs bounded reads, and flags upstream access restrictions
+separately from failed checks. It is not part of fixture tests or CI. An upstream
+403 does not establish that a credential is invalid; endpoint permissions and
+availability need separate investigation.
 
 ## Container and Cloud Run
 

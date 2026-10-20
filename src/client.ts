@@ -9,7 +9,8 @@
  * - Helper methods for common operations
  */
 
-import { isReadRequest } from './policy.js';
+import { isReadRequest, isWriteRequestForTool, WRITE_TOOLS } from './policy.js';
+import { stripAttributesPrefix } from './utils/attribute-labels.js';
 import type {
   PlytixAuthToken,
   PlytixAuthResponse,
@@ -23,6 +24,7 @@ import type {
   PlytixFamilyAttribute,
   PlytixFilterDefinition,
   PlytixAttributeDetail,
+  PlytixAttributeGroup,
   PlytixRelationshipDefinition,
   RateLimitInfo,
 } from './types.js';
@@ -42,22 +44,25 @@ export class PlytixClient {
   private responseBytes = 0;
   private cancelled = false;
   private readonly controllers = new Set<AbortController>();
-  private attributeCacheRequest?: Promise<Map<string, PlytixAttributeDetail>>;
+  private readonly attributesByLabel = new Map<string, { value: PlytixAttributeDetail; expires: number }>();
 
   private activeOperation?: Promise<unknown>;
   private operationSignal?: AbortSignal;
-  runOperation<T>(work: () => Promise<T>, signal?: AbortSignal): Promise<T> {
+  private operationTool?: string;
+  runOperation<T>(work: () => Promise<T>, signal?: AbortSignal, toolName?: string): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
     if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
     this.operationDeadline = Date.now() + 45_000;
     this.requestCount = 0;
     this.responseBytes = 0;
     this.operationSignal = signal;
+    this.operationTool = toolName;
     const abort = () => { for (const controller of this.controllers) controller.abort(); };
     signal?.addEventListener('abort', abort, { once: true });
     const pending = Promise.resolve().then(work).finally(() => {
       signal?.removeEventListener('abort', abort);
       this.operationSignal = undefined;
+      this.operationTool = undefined;
       this.activeOperation = undefined;
     });
     this.activeOperation = pending;
@@ -65,6 +70,16 @@ export class PlytixClient {
   }
   async waitForIdle(): Promise<void> {
     try { await this.activeOperation; } catch { /* The tool reports its own sanitized failure. */ }
+  }
+
+  beginApprovedWrite(): void {
+    if (!this.activeOperation || !this.operationTool || !this.config.writeTools.has(this.operationTool)
+      || !this.config.allowWrites || this.requestCount !== 0 || this.cancelled || this.operationSignal?.aborted) {
+      throw new PlytixError('Cannot begin approved write execution');
+    }
+    // Human review consumes its own bounded 30-second window. Start the API
+    // execution budget only after approval, before authentication or any fetch.
+    this.operationDeadline = Date.now() + 45_000;
   }
 
   cancel(): void {
@@ -78,7 +93,6 @@ export class PlytixClient {
     return Math.min(this.config.timeoutMs, this.operationDeadline - Date.now());
   }
   private config: Required<PlytixClientConfig>;
-  private attributeCache?: { byLabel: Map<string, PlytixAttributeDetail>; expires: number };
 
   constructor(config?: Partial<PlytixClientConfig>) {
     this.config = {
@@ -88,7 +102,11 @@ export class PlytixClient {
       authUrl: config?.authUrl ?? process.env.PLYTIX_AUTH_URL ?? DEFAULT_CONFIG.authUrl,
       timeoutMs: config?.timeoutMs ?? DEFAULT_CONFIG.timeoutMs,
       allowWrites: config?.allowWrites ?? false,
+      writeTools: new Set(config?.writeTools ?? []),
     };
+    for (const name of this.config.writeTools) {
+      if (!WRITE_TOOLS.has(name)) throw new Error('Unknown write tool');
+    }
 
     for (const value of [this.config.baseUrl, this.config.authUrl]) {
       const url = new URL(value);
@@ -108,9 +126,12 @@ export class PlytixClient {
   // Authentication
   // ─────────────────────────────────────────────────────────────
 
-  private async readJson(response: Response): Promise<unknown> {
+  private async readJson(response: Response, allowEmpty = false): Promise<unknown> {
     const reader = response.body?.getReader();
-    if (!reader) throw new PlytixError('Empty upstream response');
+    if (!reader) {
+      if (allowEmpty) return { data: [] };
+      throw new PlytixError('Empty upstream response');
+    }
     const chunks: Uint8Array[] = [];
     let total = 0;
     for (;;) {
@@ -128,7 +149,9 @@ export class PlytixClient {
       }
       chunks.push(value);
     }
-    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
+    const text = Buffer.concat(chunks).toString('utf8');
+    if (allowEmpty && !text.trim()) return { data: [] };
+    return JSON.parse(text);
   }
 
   private async getToken(): Promise<string> {
@@ -189,6 +212,10 @@ export class PlytixClient {
     }
     const readOnly = isReadRequest(endpoint, method);
     if (!readOnly && !this.config.allowWrites) throw new PlytixError('Writes are disabled');
+    if (!readOnly && (!this.operationTool || !this.config.writeTools.has(this.operationTool)
+      || !isWriteRequestForTool(this.operationTool, endpoint, method))) {
+      throw new PlytixError('Write is not authorized for this tool operation');
+    }
     const token = await this.getToken();
     const timeoutMs = this.requestTimeout();
     const controller = new AbortController();
@@ -217,7 +244,11 @@ export class PlytixClient {
         await response.body?.cancel();
         throw new PlytixError(`Plytix request failed (HTTP ${response.status})`, response.status);
       }
-      return await this.readJson(response) as PlytixResult<T>;
+      const result = await this.readJson(response, !readOnly) as PlytixResult<T>;
+      if (readOnly && (!result || !Array.isArray(result.data))) {
+        throw new PlytixError('Invalid Plytix response envelope');
+      }
+      return result;
     } catch (error) {
       if (error instanceof PlytixError) throw error;
       throw new PlytixError('Plytix request failed or timed out');
@@ -231,8 +262,7 @@ export class PlytixClient {
   async searchProducts(body: PlytixSearchBody): Promise<PlytixResult<PlytixProduct>> {
     // v2 allows up to 50 attributes
     if (body.attributes && body.attributes.length > 50) {
-      console.warn(`Plytix v2 search limited to 50 attributes, got ${body.attributes.length}`);
-      body = { ...body, attributes: body.attributes.slice(0, 50) };
+      throw new PlytixError('Product search supports at most 50 attributes; request another page of fields');
     }
 
     return this.request<PlytixProduct>('/api/v2/products/search', {
@@ -256,7 +286,7 @@ export class PlytixClient {
   }
 
   async getProductVariants(productId: string): Promise<PlytixResult<PlytixProduct>> {
-    return this.request<PlytixProduct>(`/api/v2/products/${encodeURIComponent(productId)}/variants`);
+    return this.request<PlytixProduct>(`/api/v1/products/${encodeURIComponent(productId)}/variants`);
   }
 
   // ─────────────────────────────────────────────────────────────
@@ -278,7 +308,6 @@ export class PlytixClient {
 
   async createFamily(data: {
     name: string;
-    parent_id?: string;
   }): Promise<PlytixResult<PlytixFamily>> {
     return this.request<PlytixFamily>('/api/v1/product_families', {
       method: 'POST',
@@ -288,26 +317,26 @@ export class PlytixClient {
 
   async linkFamilyAttributes(
     familyId: string,
-    attributeLabels: string[]
+    attributeIds: string[]
   ): Promise<PlytixResult<void>> {
     return this.request<void>(
       `/api/v1/product_families/${encodeURIComponent(familyId)}/attributes/link`,
       {
         method: 'POST',
-        body: JSON.stringify({ attributes: attributeLabels }),
+        body: JSON.stringify({ attributes: attributeIds }),
       }
     );
   }
 
   async unlinkFamilyAttributes(
     familyId: string,
-    attributeLabels: string[]
+    attributeIds: string[]
   ): Promise<PlytixResult<void>> {
     return this.request<void>(
       `/api/v1/product_families/${encodeURIComponent(familyId)}/attributes/unlink`,
       {
         method: 'POST',
-        body: JSON.stringify({ attributes: attributeLabels }),
+        body: JSON.stringify({ attributes: attributeIds }),
       }
     );
   }
@@ -328,16 +357,27 @@ export class PlytixClient {
   // Attributes & Filters
   // ─────────────────────────────────────────────────────────────
 
+  private async getFilters(resource: string): Promise<PlytixResult<PlytixFilterDefinition>> {
+    const result = await this.request<PlytixFilterDefinition & {
+      attributes?: PlytixFilterDefinition[];
+      properties?: PlytixFilterDefinition[];
+    }>(`/api/v1/filters/${resource}`);
+    return { ...result, data: result.data.flatMap(row =>
+      Array.isArray(row.attributes) || Array.isArray(row.properties)
+        ? [...(row.attributes ?? []), ...(row.properties ?? [])]
+        : [row]) };
+  }
+
   async getAvailableFilters(): Promise<PlytixResult<PlytixFilterDefinition>> {
-    return this.request<PlytixFilterDefinition>('/api/v1/filters/product');
+    return this.getFilters('product');
   }
 
   async getAssetFilters(): Promise<PlytixResult<PlytixFilterDefinition>> {
-    return this.request<PlytixFilterDefinition>('/api/v1/filters/asset');
+    return this.getFilters('asset');
   }
 
   async getRelationshipFilters(): Promise<PlytixResult<PlytixFilterDefinition>> {
-    return this.request<PlytixFilterDefinition>('/api/v1/filters/relationships');
+    return this.getFilters('relationships');
   }
 
   /**
@@ -379,6 +419,8 @@ export class PlytixClient {
 
       if (!result.data || result.data.length === 0) break;
       attrIds.push(...result.data.map((a) => a.id));
+      const total = result.pagination?.count ?? result.pagination?.total ?? result.pagination?.total_count;
+      if (total !== undefined && attrIds.length >= total) break;
       if (result.data.length < pageSize) break;
       if (page === 5) throw new PlytixError('Attribute discovery exceeds the five-page limit');
       page++;
@@ -398,47 +440,47 @@ export class PlytixClient {
     return result.data?.[0] ?? null;
   }
 
-  /**
-   * Build attribute cache indexed by label. Fetches all attributes once,
-   * then caches for 5 minutes to avoid N+1 queries on repeated lookups.
-   */
-  private async buildAttributeCache(): Promise<Map<string, PlytixAttributeDetail>> {
-    const now = Date.now();
-    const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-    // Return cached if still valid
-    if (this.attributeCache && now < this.attributeCache.expires) {
-      return this.attributeCache.byLabel;
-    }
-
-    if (this.attributeCacheRequest) return this.attributeCacheRequest;
-    this.attributeCacheRequest = this.fetchAttributeCache();
-    try { return await this.attributeCacheRequest; }
-    finally { this.attributeCacheRequest = undefined; }
+  async searchAttributes(body: PlytixSearchBody = {}): Promise<PlytixResult<PlytixAttributeDetail>> {
+    return this.request<PlytixAttributeDetail>('/api/v1/attributes/product/search', {
+      method: 'POST',
+      body: JSON.stringify({
+        filters: [],
+        attributes: ['name', 'label', 'type_class', 'groups', 'options', 'description', 'attributes'],
+        ...body,
+      }),
+    });
   }
 
-  private async fetchAttributeCache(): Promise<Map<string, PlytixAttributeDetail>> {
-    const attrIds = await this.searchAttributeIds();
-    const byLabel = new Map<string, PlytixAttributeDetail>();
-    // Bound fan-out; fail discovery rather than caching incomplete/unauthorized schema.
-    for (let i = 0; i < attrIds.length; i += 4) {
-      const results = await Promise.allSettled(attrIds.slice(i, i + 4).map(id => this.getAttributeById(id)));
-      for (const result of results) {
-        if (result.status === 'rejected') throw result.reason;
-        if (result.value?.label) byLabel.set(result.value.label, result.value);
-      }
-    }
-    this.attributeCache = { byLabel, expires: Date.now() + 5 * 60 * 1000 };
-    return byLabel;
+  async searchAttributeGroups(body: PlytixSearchBody = {}): Promise<PlytixResult<PlytixAttributeGroup>> {
+    return this.request<PlytixAttributeGroup>('/api/v1/attribute-groups/product/search', {
+      method: 'POST',
+      body: JSON.stringify({ filters: [], attributes: ['name', 'order', 'attribute_labels'], ...body }),
+    });
   }
 
   /**
    * Get full attribute details by label (snake_case identifier like "head_material").
-   * Uses cached attribute lookup to avoid N+1 queries.
+   * Resolve exactly one label, then fetch its full definition. Never scan the entire
+   * account (which may exceed the operation budget) to inspect one attribute.
    */
   async getAttributeByLabel(label: string): Promise<PlytixAttributeDetail | null> {
-    const cache = await this.buildAttributeCache();
-    return cache.get(label) ?? null;
+    const normalized = stripAttributesPrefix(label);
+    if (!normalized) throw new PlytixError('Attribute label is required');
+    const cached = this.attributesByLabel.get(normalized);
+    if (cached && cached.expires > Date.now()) return cached.value;
+    const matches = await this.searchAttributes({
+      filters: [[{ field: 'label', operator: 'eq', value: normalized }]],
+      attributes: ['label'], pagination: { page: 1, page_size: 2 },
+    });
+    const matching = matches.data.find(row => row.label === normalized);
+    if (!matching) return null;
+    const detail = await this.getAttributeById(matching.id);
+    if (detail && detail.label !== normalized) throw new PlytixError('Attribute lookup returned an inconsistent label');
+    if (detail) {
+      if (this.attributesByLabel.size >= 500) this.attributesByLabel.clear();
+      this.attributesByLabel.set(normalized, { value: detail, expires: Date.now() + 5 * 60_000 });
+    }
+    return detail;
   }
 
   /**
@@ -458,7 +500,11 @@ export class PlytixClient {
   async searchAssets(body?: PlytixSearchBody): Promise<PlytixResult<PlytixAsset>> {
     return this.request<PlytixAsset>('/api/v1/assets/search', {
       method: 'POST',
-      body: JSON.stringify(body ?? {}),
+      body: JSON.stringify({
+        filters: [],
+        attributes: ['filename', 'url', 'alt_text', 'categories', 'file_type', 'content_type', 'file_size', 'modified'],
+        ...body,
+      }),
     });
   }
 
@@ -468,15 +514,20 @@ export class PlytixClient {
 
   async updateAsset(
     assetId: string,
-    data: { filename?: string; categories?: string[] }
+    data: { filename?: string; categories?: string[]; alt_text?: string }
   ): Promise<PlytixResult<PlytixAsset>> {
     const body: {
       filename?: string;
       categories?: Array<{ id: string }>;
+      alt_text?: string;
     } = {};
 
     if (data.filename !== undefined) {
       body.filename = data.filename;
+    }
+    if (data.alt_text !== undefined) {
+      if (data.alt_text.length > 512) throw new PlytixError('Asset alt text must not exceed 512 characters');
+      body.alt_text = data.alt_text;
     }
 
     if (data.categories !== undefined) {
@@ -531,17 +582,15 @@ export class PlytixClient {
 
   /**
    * Link an existing asset to a product.
-   * Optionally attach it to a media attribute label.
+   * Attach it to the required thumbnail or media attribute label.
    */
   async linkProductAsset(
     productId: string,
     assetId: string,
-    attributeLabel?: string
+    attributeLabel: string
   ): Promise<PlytixResult<PlytixAsset>> {
-    const body: { id: string; attribute_label?: string } = { id: assetId };
-    if (attributeLabel !== undefined) {
-      body.attribute_label = attributeLabel;
-    }
+    if (!attributeLabel?.trim()) throw new PlytixError('Asset destination attribute is required');
+    const body = { id: assetId, attribute_label: attributeLabel };
 
     return this.request<PlytixAsset>(`/api/v2/products/${encodeURIComponent(productId)}/assets`, {
       method: 'POST',
@@ -613,6 +662,13 @@ export class PlytixClient {
     return this.request<PlytixCategory>('/api/v1/categories/product/search', {
       method: 'POST',
       body: JSON.stringify(body ?? {}),
+    });
+  }
+
+  async searchAssetCategories(body: PlytixSearchBody = {}): Promise<PlytixResult<PlytixCategory>> {
+    return this.request<PlytixCategory>('/api/v1/categories/file/search', {
+      method: 'POST',
+      body: JSON.stringify({ filters: [], attributes: ['name', 'path', 'parents_ids', 'n_children', 'order'], ...body }),
     });
   }
 

@@ -3,7 +3,7 @@ import type { Server } from 'node:http';
 import { request } from 'node:http';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { createHttpApp, type HttpConfig } from '../http.js';
+import { createHttpApp, loadHttpConfig, type HttpConfig } from '../http.js';
 import { PlytixClient } from '../client.js';
 import { READ_TOOLS, WRITE_TOOLS, parseWriteTools } from '../policy.js';
 
@@ -59,6 +59,44 @@ describe('stateless Streamable HTTP', () => {
     } finally { await client.close(); }
   });
 
+  it('does not treat the service token or an approved argument as write approval', async () => {
+    const token = 'fixture-service-token-long-enough-for-testing';
+    const update = vi.spyOn(PlytixClient.prototype, 'updateProduct');
+    const url = await start({ authToken: token, writeTools: new Set(['products_update']) });
+    const client = new Client({ name: 'fixture-client', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(url, {
+      requestInit: { headers: { ...headers, 'X-MCP-Token': token } },
+    }));
+    try {
+      const result = await client.callTool({ name: 'products_update',
+        arguments: { product_id: 'fixture', label: 'Changed', approved: true } });
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result)).toContain('approval is unavailable');
+      expect(update).not.toHaveBeenCalled();
+    } finally { await client.close(); }
+  });
+
+  it('permits an approved write through a trusted host integration and still hides other writes', async () => {
+    const token = 'fixture-service-token-long-enough-for-testing';
+    const update = vi.spyOn(PlytixClient.prototype, 'updateProduct').mockResolvedValue({ data: [{ id: 'fixture' }] });
+    const approval = vi.fn(async () => true);
+    const url = await start({ authToken: token, writeTools: new Set(['products_update']), requestWriteApproval: approval });
+    const client = new Client({ name: 'fixture-client', version: '1' });
+    await client.connect(new StreamableHTTPClientTransport(url, {
+      requestInit: { headers: { ...headers, 'X-MCP-Token': token } },
+    }));
+    try {
+      const result = await client.callTool({ name: 'products_update',
+        arguments: { product_id: 'fixture', label: 'Changed' } });
+      expect(result.isError).not.toBe(true);
+      expect(update).toHaveBeenCalledExactlyOnceWith('fixture', { label: 'Changed' });
+      expect(approval).toHaveBeenCalledOnce();
+      const denied = await client.callTool({ name: 'products_create', arguments: { sku: 'fixture' } });
+      expect(denied.isError).toBe(true);
+      expect(approval).toHaveBeenCalledOnce();
+    } finally { await client.close(); }
+  });
+
   it('retains the complete former Worker catalog plus identifier primitives when explicitly enabled', async () => {
     const token = 'fixture-service-token-long-enough-for-testing';
     const url = await start({ authToken: token, writeTools: WRITE_TOOLS });
@@ -67,8 +105,8 @@ describe('stateless Streamable HTTP', () => {
     try {
       const tools = (await client.listTools()).tools;
       expect(new Set(tools.map(t => t.name))).toEqual(new Set([...READ_TOOLS, ...WRITE_TOOLS]));
-      expect(tools).toHaveLength(47);
-      expect(tools.filter(t => !t.annotations?.readOnlyHint)).toHaveLength(20);
+      expect(tools).toHaveLength(READ_TOOLS.size + WRITE_TOOLS.size);
+      expect(tools.filter(t => !t.annotations?.readOnlyHint)).toHaveLength(WRITE_TOOLS.size);
     } finally { await client.close(); }
   });
 
@@ -144,5 +182,33 @@ describe('stateless Streamable HTTP', () => {
     expect(() => createHttpApp({ ...config, writeTools: new Set(['products_update']) })).toThrow('require MCP_AUTH_TOKEN');
     expect(() => parseWriteTools('["products_typo"]')).toThrow('unknown write tool');
     expect(() => parseWriteTools('true')).toThrow();
+    expect(() => createHttpApp({ ...config, allowedHosts: ['*'] })).toThrow('exact hostnames');
+    expect(() => createHttpApp({ ...config, allowedOrigins: ['https://example.com/path'] })).toThrow('exact HTTP');
+    expect(() => createHttpApp({ ...config, maxConcurrentRequests: 0 })).toThrow('positive integers');
+    expect(() => createHttpApp({ ...config, requestsPerMinute: Number.NaN })).toThrow('positive integers');
+    expect(() => createHttpApp({ ...config, authToken: 'fixture-token-long-enough-for-testing',
+      writeTools: new Set(['unknown_write']) })).toThrow('unknown write tool');
+  });
+
+  it('trims configured host lists and normalizes hostname casing', async () => {
+    const loaded = loadHttpConfig({ MCP_ALLOWED_HOSTS: ' LOCALHOST, 127.0.0.1 ',
+      MCP_ALLOWED_ORIGINS: ' https://client.example ' });
+    expect(loaded.allowedHosts).toEqual(['localhost', '127.0.0.1']);
+    expect(loaded.allowedOrigins).toEqual(['https://client.example']);
+    const url = await start({ allowedHosts: ['LOCALHOST', '127.0.0.1'] });
+    const response = await fetch(url, { method: 'POST', headers: { ...headers, Host: 'LOCALHOST' }, body: '{}' });
+    expect(response.status).not.toBe(403);
+  });
+
+  it('rejects duplicate security headers instead of allowing proxy parser disagreement', async () => {
+    const url = await start();
+    const status = await new Promise<number | undefined>((resolve, reject) => {
+      const req = request(url, { method: 'POST',
+        headers: { ...headers, 'X-Plytix-API-Key': ['first-fixture-key', 'second-fixture-key'] },
+      }, res => { res.resume(); resolve(res.statusCode); });
+      req.on('error', reject);
+      req.end('{}');
+    });
+    expect(status).toBe(400);
   });
 });

@@ -1,44 +1,81 @@
-# Local validation
+# Validation
 
-Verified on 2026-10-15, using fixture data only:
+## Version 0.4.0 — October 20, 2026
 
 | Check | Result |
 | --- | --- |
-| `npm ci --ignore-scripts` | Pass on Desktop Node 22.14.0 |
-| `npm run typecheck` and `npm run build` | Pass |
-| `npm test` | 60 tests pass across eight files |
-| `npm audit --audit-level=moderate` | Zero reported advisories in the resolved tree |
-| `docker build -t plytix-mcp:local .` | Pass with Node 24.22.0 |
-| `node scripts/container-smoke.mjs` | Pass with 0.25 CPU and 256 MiB limit |
+| `npm run typecheck` | Pass |
+| `npm run build` | Pass |
+| `npm test` | 114 tests pass across 13 files |
+| `npm audit --omit=dev --audit-level=high` | Zero reported production vulnerabilities |
+| Fresh SDK stdio session against the configured local account | All 34 advertised read tools exercised in 36 bounded calls |
+| Live read results | 32 successful calls, two explicit partial results, two upstream HTTP 403 restrictions |
+| Live mutations | Not performed; tested with fixtures only |
+| Cloud deployment / IAM / credentials changes | Not performed |
 
-The container test used a non-root user, read-only filesystem, dropped Linux
-capabilities, no-new-privileges and a randomly assigned loopback-only published port.
-It verified the authenticated SDK handshake, 27 read-only tools, a local identifier
-operation, unauthenticated rejection and mutation-tool denial. Observed fixture
-memory usage was about 36.5 MiB. The test container was stopped and removed.
+The read checks use existing ignored local credentials and force
+`PLYTIX_WRITE_TOOLS=[]` in a fresh subprocess. The repeatable command is
+`npm run test:live:read`. Its output contains statuses, not product records or
+credentials. Access restrictions are reported separately from implementation or
+protocol failures; a successful exit does not mean every endpoint is accessible.
 
-Tests cover all original lookup/identifier cases, API route/payload compatibility,
-all 47 tools with explicit write enablement, default write hiding and API rejection,
-invalid SDK inputs, Origin/Host enforcement, stateless notification/protocol
-behavior, request/body limits, disconnect capacity, JWT password isolation,
-credential-safe errors, bounded retries and schema discovery. A 250-attribute
-fixture exercises actual client request accounting. No live Plytix requests occurred.
+### Live findings and fixes
 
-An independent focused review found and prompted fixes to unbounded schema fan-out,
-disconnect concurrency accounting and masked lookup failures. A follow-up identified
-an interaction between discovery size and the request budget; the budget now covers
-bounded discovery and has regression coverage. Concurrent stdio calls are deliberately
-rejected while a prior tool runs.
+- Attribute discovery formerly returned zero custom and system attributes because
+  it read the filter wrapper as a field. It now preserves both `attributes` and
+  `properties`, including parent/variant filter operators.
+- Asset search formerly returned HTTP 422 without filters. It now supplies empty
+  filters and requests useful metadata, including alt text.
+- Variant listing formerly used a v2 GET route that returned HTTP 405. The
+  documented v1 route succeeds.
+- Attribute lookups now filter by exact label and fetch one definition instead of
+  scanning and hydrating the entire account. Prefix-normalized lookup was verified.
+- Schema search, group membership, completeness type filtering, family attribute
+  lists, product ancestry inspection, bounded value profiling, products, assets,
+  categories, relationships and identifier lookups were exercised live.
 
-Not verified: real Plytix accounts, direct hosted AI clients, production Cloud Run
-deployment, Google IAM/secret policy, cloud cold-start behavior or billed cost. Those
-require confirmed project identity and the approvals in [deployment.md](deployment.md).
-Dependency advisories and base images can change; recheck before deployment.
+### Remaining access restrictions
 
-A fresh review of commit 179acdc found SDK cancellation was not propagated into
-stdio operations, and schema discovery lacked a cumulative byte limit. The fixes
-wire operation-scoped AbortSignal handling without disabling the next stdio call,
-and enforce an 8 MiB aggregate response budget. Fixture regressions cover a
-cancelled pending write, cancellation of an in-flight fetch, subsequent operation
-recovery and cumulative response exhaustion. Stateless HTTP cross-request
-cancellation remains a documented transport limitation.
+`families_get` and `asset_categories_search` receive HTTP 403 from Plytix with the
+current account. The documented route shapes were checked. Other authenticated
+calls succeed, so this is not evidence of globally missing/invalid credentials.
+No role, permission or credential changes were attempted.
+
+`families_inspect` and `products_get_full` preserve available data and explicitly
+report the unavailable family-detail section. This is a partial result, not proof
+that the family is absent. Product inheritance inspection obtains the accessible
+family attribute configuration independently.
+
+### Fixture and security coverage
+
+Tests cover actual nested filter shapes, matching-count versus account-count
+pagination, metadata projections, zero/false values, completeness members,
+bounded and duplicate-page sampling, inheritance cycles/depth/partial access,
+system/custom attribute label collisions, and required asset destinations.
+
+Both transports share the same tool registration and API client. Fixtures cover
+read-only defaults, exact write allowlists and API route checks, per-invocation
+approval, rejected/expired/cancelled approvals, immutable reviewed arguments,
+separate approval/execution budgets, no mutation retries, asynchronous acceptance,
+and relationship readback that does not confuse ignored writes with completion.
+
+HTTP tests cover authentication, credential isolation, duplicate security headers,
+Host/Origin enforcement, request/body/concurrency limits and SDK protocol behavior.
+Operation cancellation and cumulative response limits remain enforced.
+
+Actual human approval UI compatibility, live mutations, multi-user OAuth, cloud
+approval/audit integration, production deployment, and downstream channel
+processing remain unverified. Channels/formula/list definitions lack documented
+public routes; see [API coverage](api-coverage.md).
+
+## Previous container validation — October 15, 2026
+
+The previous 0.3 code passed a Node 24.22.0 image build and fixture container
+smoke check under a 0.25 CPU / 256 MiB limit. The container ran as `node` with a
+read-only filesystem, dropped capabilities and a loopback-only published port.
+Observed fixture memory was about 36.5 MiB. This is historical evidence; the
+0.4 image/container check has not been rerun. The smoke script now checks the
+complete expected read-tool set instead of a stale fixed count.
+
+Dependency advisories and base images can change. Recheck the intended image and
+client before any separately approved deployment.

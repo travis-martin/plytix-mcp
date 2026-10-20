@@ -8,10 +8,11 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
-import type { PlytixProduct } from '../types.js';
+import type { PlytixProduct, PlytixSearchBody } from '../types.js';
 import { PlytixLookup } from '../lookup/index.js';
 import { registerTool } from './register.js';
 import type { IdentifierType } from '../lookup/identifier.js';
+import { filterSchema } from '../utils/search-schema.js';
 
 export function registerProductTools(server: McpServer, client: PlytixClient) {
   // Create lookup instance for smart search
@@ -236,34 +237,36 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
 
   registerTool<{
     attributes?: string[];
-    filters?: unknown[];
-    pagination?: { page: number; page_size: number };
+    filters?: PlytixSearchBody['filters'];
+    pagination?: { page: number; page_size: number; order?: string };
     sort?: unknown;
   }>(
     server,
     'products_search',
     {
       title: 'Search Products',
-      description: 'Search products with filters.',
+      description: 'Search products with filters and explicit returned fields. Use products_filters to discover valid field keys and operators.',
       inputSchema: {
         attributes: z
           .array(z.string())
+          .max(50)
           .optional()
           .describe('List of attributes to return (max 50). Custom attrs need "attributes." prefix.'),
         filters: z
-          .array(z.any())
+          .array(z.array(filterSchema))
           .optional()
           .describe(
-            'Search filters. Each filter is an array of conditions (OR within, AND between). ' +
+            'Search filters. Conditions within each inner array are AND; separate inner arrays are OR. ' +
               'Format: [[{field, operator, value}], [{field, operator, value}]]'
           ),
         pagination: z
           .object({
             page: z.number().int().positive().default(1),
             page_size: z.number().int().positive().max(100).default(25),
+            order: z.string().optional().describe('Field to sort by; prefix with - for descending'),
           })
           .optional(),
-        sort: z.any().optional().describe('Sorting options'),
+        sort: z.any().optional().describe('Legacy sort payload; use pagination.order for documented sorting'),
       },
     },
     async (args) => {
