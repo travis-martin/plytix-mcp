@@ -1,0 +1,10 @@
+{
+  "name": "plytix-local",
+  "interface": { "displayName": "Plytix Local" },
+  "plugins": [{
+    "name": "plytix-catalog",
+    "source": { "source": "local", "path": "./plugins/plytix-catalog" },
+    "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+    "category": "Business & Operations"
+  }]
+}

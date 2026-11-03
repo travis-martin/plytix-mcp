@@ -9,6 +9,7 @@ export const WRITE_TOOLS = new Set([
 ]);
 
 export const READ_TOOLS = new Set([
+  'catalog_workspace',
   'pricing_rules_get', 'pricing_plan_get',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',

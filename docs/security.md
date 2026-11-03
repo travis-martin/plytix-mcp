@@ -13,8 +13,10 @@ Schema learning is operator opt-in and retains structural metadata only.
 Business definitions remain unreviewed proposals until a local operator confirms
 them. `knowledge_propose` has its own `MCP_KNOWLEDGE_WRITE_TOOLS` allowlist and
 exact-argument host approval; it cannot authorize any Plytix write route.
-Standalone HTTP cannot supply that approval. Registry changes are loaded per
-operation so revoked membership applies to existing sessions.
+Default stateless HTTP cannot supply that approval. Opt-in trusted-host HTTP
+sessions use the same form approval as stdio; see the HTTP approval section below.
+Registry changes are loaded per operation so revoked membership applies to
+existing sessions.
 
 Knowledge content is untrusted contextual data, never executable instructions.
 The filesystem backend is private single-volume storage with bounded validated
@@ -24,13 +26,18 @@ See [knowledge operations and limitations](knowledge.md).
 
 ## Enforcement
 
-- Default policy hides all mutation tools, rejects unknown/unclassified tools,
+- Default policy hides all product and rule mutation tools, rejects unknown/unclassified tools,
   and rejects API mutations before authentication. Only exact known search POSTs
   count as reads. Enabling writes requires a JSON allowlist of exact tool names.
   The API client independently requires that allowlist, an active operation for
   the named tool, and the tool's permitted HTTP method and endpoint. A read tool
   cannot mutate data even when a different write tool is enabled.
-- Every registered write requires a trusted approval provider to approve the
+- `pricing_import` and `pricing_plan` are explicit local/cloud draft-storage tools,
+  exposed by default with `readOnlyHint: false`, `destructiveHint: false`, and
+  `idempotentHint: false`. They save private source/plan files but receive no API
+  mutation authority. `pricing_rules_save` and `pricing_apply` remain hidden until
+  separately allowlisted and require exact host approval.
+- Every product, pricing-rule or shared-knowledge mutation requires a trusted approval provider to approve the
   exact validated argument snapshot for that invocation. No `approved` tool
   argument, annotation, service token or previous approval grants this permission.
   Missing, rejected, cancelled, expired or failed approval stops before the handler.
@@ -41,7 +48,7 @@ See [knowledge operations and limitations](knowledge.md).
 - Cloud deployment is designed for IAM-protected Cloud Run in addition to this
   application token. No IAM trust is inferred from client headers. No public IAM
   grants or OAuth endpoints are created by the repository.
-- HTTP creates a fresh Plytix client per request. JWT and schema caches never
+- Default stateless HTTP creates a fresh Plytix client per request. JWT and schema caches never
   cross request credential boundaries. Regression coverage specifically rejects a
   wrong password with a previously successful key. Stdio caches are instance-local.
 - Identical reads within one tool invocation share an upstream request and return
@@ -54,10 +61,16 @@ See [knowledge operations and limitations](knowledge.md).
   Duplicate security headers are rejected to avoid disagreement with proxy/header
   parsers. Configured hosts must be exact hostnames; origins must be exact HTTP(S)
   origins. Wildcards and invalid resource limits fail startup.
-- SDK stateless JSON responses implement initialize, protocol-version checks,
+- Default SDK stateless JSON responses implement initialize, protocol-version checks,
   validated tool input and empty 202 notifications. Batch arrays and session IDs
   are rejected. GET and DELETE on `/mcp` return 405; no persistent SSE connection
   or affinity is required.
+- `MCP_APPROVAL_SESSIONS=true` opts into bounded private MCP sessions, authenticated
+  on every message by the service token and the initiating Plytix credential pair.
+  Credentials are compared through fixed-length digests. Another credential pair
+  cannot inspect, approve, cancel or terminate the session. No caller-supplied
+  account ID or unverified proxy header grants access. Sessions expire after ten
+  minutes, and closed sessions retain their capacity slot until work drains.
 
 ## Credentials and errors
 
@@ -75,8 +88,11 @@ installed. Cloud logging must not add header/body capture.
 ## Bounded work
 
 - HTTP: 256 KiB JSON body, 60 accepted attempts/minute/instance, four active
-  requests by default. The Cloud Run template constrains platform concurrency to
-  one and maximum instances to one. These are resource guards, not distributed
+  requests (stateless mode) or four sessions (approval mode) by default. Each
+  session allows one active tool operation. The default read-only Cloud Run
+  template constrains concurrency to one; approval sessions require concurrent
+  requests for form responses and use a separately reviewed configuration.
+  These are resource guards, not distributed
   account-wide quotas or a hard billing cap.
 - Each tool operation: 45 seconds and 512 upstream authentication/API requests.
   Each individual fetch, including response-body consumption, has a 15-second
@@ -113,14 +129,17 @@ locate an earlier request's server instance. To stop HTTP work, the client must
 abort the original HTTP connection and that disconnect must reach this process
 (proxies can delay it); closing only the client's pending promise or
 sending a separate cancellation notification does not guarantee cancellation.
-The operation deadline/resource budgets still apply. Keep HTTP writes disabled
-until the chosen client's behavior has been verified; this change does not add
-stateful cancellation routing or advertise transactional cancellation.
+The operation deadline/resource budgets still apply. This limitation describes
+default stateless mode. Opt-in sessions route cancellation to the matching SDK
+session. A disconnected tool stream, DELETE, expiry, or process shutdown cancels
+that session and its pending approvals. Clients should close their own pending
+request/transport when a session disappears. Neither mode promises rollback.
 
 Cancellation does not roll back a write already accepted by Plytix. Inspect actual
 state before deciding whether to repeat an ambiguous mutation. This repository
-does not provide transactionality, idempotency keys, distributed quotas, per-user
-audit history or an external OAuth authorization server.
+does not provide transactionality, upstream idempotency keys, distributed quotas,
+general per-user audit history or an external OAuth authorization server. Pricing
+adds credential-scoped persisted per-plan/per-change audit and one-shot reservation.
 
 Lookup fallbacks can handle unsupported query/not-found responses; authentication,
 rate-limit, transport and server failures remain failures rather than reporting an
@@ -148,12 +167,20 @@ and an explicit minimal list for approved writes. These use the same implementat
 and can use separate Plytix credentials with appropriate account permissions.
 Set the host's own tool approval mode to prompt as an additional safeguard.
 
-### HTTP approval and future cloud use
+### HTTP approval modes
 
-The standalone HTTP entry point has no write approval provider. A nonempty
+The default stateless HTTP entry point has no write approval provider. A nonempty
 allowlist can advertise selected write tools, but invoking them returns an
 approval-unavailable error and performs no mutation. This is deliberate:
 stateless JSON HTTP cannot assume a working interactive form exchange.
+
+An operator may explicitly enable `MCP_APPROVAL_SESSIONS=true` for trusted private
+MCP clients. The same form provider used by stdio then shows the complete immutable
+arguments and requires typed `APPROVE`. Unsupported clients fail closed. Trust in
+the host to display a human approval is identical to stdio; this does not turn a
+shared service secret into public multi-user identity or OAuth. The service token
+is mandatory even on loopback in this mode. Sessions are ephemeral; durable pricing
+plans and their consumed state remain in the configured file/GCS backend.
 
 An embedding application may supply the code-level `requestWriteApproval`
 callback to `createHttpApp`. It must obtain an independent user approval for the
@@ -165,12 +192,33 @@ its verified authentication context; never log its credential headers. Returning
 The shared application token provides no per-user identity, so this hook alone
 does not make the current service a multi-user authorization system.
 
-Before shipping cloud writes, implement and verify user authentication, per-user
+For a public or multi-user cloud gateway, implement and verify user authentication, per-user
 tool policy, credential isolation, exact-action approval and an appropriate audit
 trail in the chosen gateway. A signed approval-token design also needs expiry,
 account binding and durable one-time consumption across instances and restarts.
 None of those controls is implied by an HTTP header or an in-memory token cache.
-Keep the deployed HTTP connection read-only until that integration is ready.
-The current 60-second Cloud Run timeout is for read-only use. A future write
-gateway and its upstream proxies must allow at least 90 seconds for approval
-plus execution; increasing that timeout alone does not enable write approval.
+Keep public/shared hosted writes disabled until that integration is ready. Private
+trusted-host sessions must pass real client compatibility checks before enabling
+their write allowlist. The default 60-second Cloud Run template is for read-only
+stateless use. Approval sessions use at least four concurrent requests, one CPU,
+and a 120-second timeout; increasing a timeout alone does not enable approval.
+See [private remote pricing](remote-pricing.md).
+
+## Durable pricing files
+
+`PLYTIX_PRICING_DIR` selects private single-volume JSON storage. For ephemeral or
+multi-instance hosting, `PLYTIX_PRICING_GCS_BUCKET` selects an approved private
+bucket and takes precedence over the directory; errors never fall back to local
+files. Calls authenticate with Plytix before selecting a credential/endpoint hash
+scope. Operator configuration supplies the storage location, never tool arguments.
+
+GCS reads pin object generations; writes use generation compare-and-swap.
+Plan reservation is durable and single-use across competing processes and restarts.
+Rule history is committed atomically with current rules. All files are limited
+to 8 MiB. Storage conflicts may retry bounded state reads, but product mutations
+never automatically retry. A crashed/unknown execution stays consumed for review.
+Uploaded source extracts, pricing, conditions and review evidence are private
+business data; enforce host ACLs or private bucket access and approved retention.
+Google runtime access uses Application Default Credentials without packaged keys.
+Resource creation and grants require exact action-time approval; see
+[pricing workflow and boundaries](pricing.md).

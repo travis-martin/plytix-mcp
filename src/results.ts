@@ -104,7 +104,7 @@ export function decorateResult(name: string, result: ToolResult, started: string
     object.scope?.complete_for_query === false || object.coverage?.complete_for_query === false;
   const observed = sources.map(item => !item.cached && item.observed_at >= started);
   const local = name.startsWith('identifier_') || name === 'match_score' ||
-    name === 'server_capabilities' || name === 'discovery_guide';
+    name === 'server_capabilities' || name === 'discovery_guide' || name === 'catalog_workspace';
   const metadata = resultMetadataSchema.parse({
     schema_version: 1, tool: name, generated_at: new Date().toISOString(),
     status: result.isError ? 'error' : partial ? 'partial' : 'ok',

@@ -11,6 +11,7 @@ export interface ToolDefinition {
   title?: string;
   description: string;
   inputSchema: ZodRawShape;
+  _meta?: Record<string, unknown>;
 }
 export interface WriteApprovalRequest {
   toolName: string;

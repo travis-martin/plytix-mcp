@@ -6,4 +6,6 @@
 !LICENSE
 !src/
 !src/**
+!scripts/
+!scripts/build-ui.mjs
 src/__tests__/

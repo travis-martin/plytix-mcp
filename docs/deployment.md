@@ -1,10 +1,13 @@
 # Cloud Run readiness
 
-The explicitly approved billing linkage and bounded preparation are complete:
+The historical preparation snapshot from 2026-10-15 recorded approved billing linkage:
 required APIs, an empty private image repository, a keyless runtime identity and
 an empty application-secret container with runtime-only explicit accessor binding.
-No image, secret value or Cloud Run service has been deployed. This remains a
-deployment plan and unrendered template.
+At that snapshot no image, secret value or Cloud Run service had been deployed.
+These dated notes are not a current inventory. Recheck the actual service, image,
+secret metadata and IAM before release. This document retains the default
+stateless deployment plan; [private remote pricing](remote-pricing.md) describes
+the implemented opt-in session/GCS configuration.
 
 For the dated operator snapshot, see [project handoff](project-handoff.md) and
 [current approval bundle](cloud-approval.md). The 2026-10-15 checks verified the
@@ -15,7 +18,7 @@ and exact action-time approvals.
 
 See [continuous deployment](continuous-deployment.md) for tested stable-branch
 updates. Approved keyless CI trust and publish-only settings are configured.
-The local image upload is deferred to that pipeline; no service is deployed.
+That preparation deferred the local image upload to the pipeline.
 The [owner finish checklist](owner-checklist.md) records the remaining steps.
 
 ## Resolve identity first
@@ -34,7 +37,7 @@ If additional consent is requested, stop for owner review. Verify project/billin
 enabled APIs and selected resource metadata after that refresh; do not access
 secret payloads. See [Google's login reference](https://docs.cloud.google.com/sdk/gcloud/reference/auth/login).
 
-## Proposed small configuration
+## Default stateless configuration
 
 `deploy/cloud-run.template.yaml` proposes a new `plytix-mcp` service with:
 
@@ -63,6 +66,31 @@ For an illustrative us-central1 workload of 10,000 HTTP requests/month at five
 billed seconds each, the selected CPU/RAM and request count cost about $0.34/month
 before shared free allowances, cold starts, storage, networking and logging.
 This is a usage assumption, not an observed or guaranteed bill.
+
+## Opt-in pricing sessions and durable storage
+
+The small stateless template must not be used unchanged for interactive approval:
+concurrency one would prevent a form response from reaching a waiting tool call.
+For the implemented private pricing mode explicitly set `MCP_APPROVAL_SESSIONS=true`,
+at least four concurrent requests, one CPU, and a 120-second request timeout.
+Keep minimum instances zero, initially maximum one, private IAM invocation,
+session affinity, exact Host validation, and no browser origins unless separately
+needed. Affinity is best effort: a lost session fails closed and must reconnect.
+Verify actual client form support before enabling any write tool.
+
+Set `PLYTIX_PRICING_GCS_BUCKET` to an approved private bucket for durable source,
+rules and pricing-plan JSON. Generation preconditions provide atomic updates and
+one-shot reservation across instances. The bucket setting never falls back to
+ephemeral filesystem storage. Local and remote instances can use the same bucket
+and credential scope; different Plytix credentials remain isolated. The existing
+shared-knowledge registry is a separate feature and still requires its own suitable
+durable backend when hosted.
+
+Approve the concrete bucket, retention settings, and runtime object access on that
+bucket only. No project-wide storage role or downloaded service-account key is
+required by this design. Configure Google Application Default Credentials through
+the approved runtime identity. These settings are implemented capabilities, not
+evidence that resources have been created or live writes verified.
 
 ## Required permission scope
 
@@ -138,17 +166,16 @@ protocol exchange; no live write or actual host approval UI was tested.
 Allow at least 90 seconds for the write client's tool call: approval may take
 30 seconds and approved execution receives its own 45-second budget.
 
-The standalone HTTP service remains read-only in practice: selected writes can
-be listed by configuration, but they cannot execute without a trusted embedding
-application's approval provider. Do not equate the application service token
-with user approval. A future cloud write service needs authenticated per-user
-authorization, account-bound credentials and exact-action approvals before
-enabling writes. Hosted-client OAuth compatibility, durable audit/replay controls
-and cancellation behavior must be verified as part of that deployment. See
+Default stateless HTTP remains read-only without a trusted embedding approval
+provider. Opt-in private approval sessions use the same exact-argument form as
+stdio and authenticate every message with the service token plus session-bound
+Plytix credentials. Do not equate a token with human approval. Public multi-user
+hosting still needs separately reviewed per-user authorization/OAuth. Verify
+the chosen desktop client's form handling, private connection, cancellation,
+durable plan storage and replay protection before enabling a write allowlist. See
 [write enforcement and approval](security.md#before-allowing-writes).
-The current 60-second service timeout is suitable for the read-only deployment
-plan. A write gateway, its client and upstream proxies must allow at least
-90 seconds; review that configuration with the future write deployment.
+The default 60-second service timeout is suitable for stateless reads. Use
+120 seconds for the approved session deployment, client and upstream proxies.
 
 No cloud write deployment, credential creation, permission grant or public access
 change is authorized by this local implementation.
@@ -157,6 +184,21 @@ change is authorized by this local implementation.
 
 Verify private IAM, zero minimum instances, maximum one, selected resources,
 immutable image, pinned secret, service identity and exact Host/Origin values.
-Confirm unauthenticated access is denied and only read tools are listed. Run the
+Confirm unauthenticated access is denied and the exact expected catalog is listed:
+read and non-destructive pricing-draft tools by default, with only the explicitly
+approved mutation tools on a write connection. Run the
 approved bounded read and inspect status-only logs without headers or payloads.
 Review actual cold-start/memory/cost behavior before changing resource limits.
+
+For a fresh local process check without live account reads:
+
+```powershell
+node scripts/verify-installed.mjs
+```
+
+Use `--entry PATH` for an installed plugin's bundled server and `--env-file PATH`
+for the selected private dotenv file. With explicit existing-credential read
+authorization, add `--live` for just pricing rule status, one family and one
+product search row. The script forcibly disables writes, uses no elicitation,
+never imports documents, and prints statuses/counts only. This validates that
+process/connection; it does not establish remote deployment or a successful write.

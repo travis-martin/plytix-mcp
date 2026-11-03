@@ -1,5 +1,27 @@
 # Plytix MCP
 
+## Catalog plugin and reviewed pricing
+
+The plugin adds catalog exploration, product inspection, a dictionary view and
+price-list review to the shared local/HTTP server. See [plugin setup](docs/plugin.md).
+
+For an uploaded price list, the workflow first suggests families from exact SKU
+matches. Review the mappings and calculation rules, then inspect a saved plan of
+old/new numeric values, restrictions and inheritance effects. Only an explicitly
+allowlisted, individually approved call can apply it. Each update is rechecked
+and read back; uncertain execution stops and remains recorded for review.
+
+Brand/supplier aliases, conditions, effective dates, calculation steps and important
+review attributes live in versioned JSON rules outside reusable code. Source
+snapshots and execution results are also retained. Proposed knowledge is never
+silently promoted to an executable rule. See [pricing workflow](docs/pricing.md)
+and [private remote setup](docs/remote-pricing.md).
+
+Local storage uses private JSON files; optional Google Cloud Storage uses object
+generation checks for durable remote rules and one-shot execution reservation.
+Both transports share the same handlers. Authenticated HTTP form-approval sessions
+are opt-in; ordinary HTTP remains stateless with writes blocked without approval.
+
 MCP tools for interactive Plytix product QA, schema discovery, assets, families,
 variants and relationships. Complements existing synchronization systems.
 
