@@ -26,9 +26,14 @@ manual/retirement protection, stale rule aliases, credential isolation and stora
 failure reporting. Current Plytix schema remains authoritative. See
 [pricing storage compatibility](pricing.md) before rolling back to an older binary.
 
-The remote service remains on its previously approved version until this release's
-immutable image receives separate deployment approval. Image publication alone
-does not establish remote activation or authorize product changes.
+The exact v0.8.0 image received separate deployment approval and is active on ready
+revision `plytix-mcp-00004-6qh` with 100% traffic. Before/after checks confirm the
+existing environment, runtime, resources, scaling, sessions and private IAM are
+unchanged. Fresh remote SDK reads verify version 0.8.0, 73 tools, 23 writes and
+host mode; native Codex capabilities and rules reads also pass. No product writes
+were performed. The current credential scope has no saved rules or dictionary
+entries, so automatic indexing of existing rules was not exercised live. New
+workflow inputs will populate that scope; fixture tests verify persistence behavior.
 
 ## Version 0.7.1 — November 3, 2026
 
