@@ -13,6 +13,8 @@ export function registerCapabilityTools(server: McpServer) {
         documentation: 'https://apidocs.plytix.com/',
         reviewed_on: '2026-10-20',
         getting_started: {
+          pricing: ['pricing_import', 'pricing_rules_get', 'pricing_plan', 'pricing_plan_get'],
+          pricing_storage: 'PLYTIX_PRICING_DIR selects a private single-volume store. Rules, source snapshots, plans and execution audits are reviewable JSON. Hosted ephemeral storage is insufficient.',
           guide: 'discovery_guide',
           dictionary: 'catalog_dictionary',
           shared_knowledge: 'knowledge_status',

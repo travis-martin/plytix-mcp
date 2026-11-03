@@ -3,7 +3,7 @@ import { execFileSync } from 'node:child_process';
 import assert from 'node:assert/strict';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
-import { READ_TOOLS } from '../dist/policy.js';
+import { DEFAULT_TOOLS, READ_TOOLS } from '../dist/policy.js';
 
 const image = process.argv[2] ?? 'plytix-mcp:local';
 const name = `plytix-mcp-fixture-${process.pid}`;
@@ -32,8 +32,8 @@ try {
     'X-MCP-Token': fixtureToken, 'X-Plytix-API-Key': 'fixture', 'X-Plytix-API-Password': 'fixture',
   } } }));
   const tools = (await client.listTools()).tools;
-  assert.deepEqual(new Set(tools.map(tool => tool.name)), READ_TOOLS);
-  assert.ok(tools.every(tool => tool.annotations?.readOnlyHint));
+  assert.deepEqual(new Set(tools.map(tool => tool.name)), DEFAULT_TOOLS);
+  assert.ok(tools.every(tool => tool.annotations?.readOnlyHint === READ_TOOLS.has(tool.name)));
   const result = await client.callTool({ name: 'identifier_detect', arguments: { value: 'ABC-123' } });
   assert.notEqual(result.isError, true);
   const denied = await client.callTool({ name: 'products_update', arguments: { product_id: 'fixture' } });

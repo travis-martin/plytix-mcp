@@ -165,7 +165,11 @@ describe('per-tool API route policy', () => {
     ['relationships_set_quantity', 'PATCH', '/api/v2/products/id/relationships/relationship'],
   ];
   it('classifies every enabled mutation and rejects changed methods/routes', () => {
-    expect(new Set(routes.map(([name]) => name))).toEqual(WRITE_TOOLS);
+    expect(new Set([...routes.map(([name]) => name), 'pricing_apply', 'pricing_rules_save'])).toEqual(WRITE_TOOLS);
+    expect(isWriteRequestForTool('pricing_apply', '/api/v2/products/p', 'PATCH')).toBe(true);
+    expect(isWriteRequestForTool('pricing_apply', '/api/v2/products', 'POST')).toBe(false);
+    expect(isWriteRequestForTool('pricing_apply', '/api/v2/products/p', 'DELETE')).toBe(false);
+    for (const [, method, path] of routes) expect(isWriteRequestForTool('pricing_rules_save', path, method)).toBe(false);
     for (const [name, method, path] of routes) {
       expect(isWriteRequestForTool(name, path, method)).toBe(true);
       expect(isWriteRequestForTool(name, `${path}/unexpected`, method)).toBe(false);

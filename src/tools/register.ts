@@ -1,6 +1,6 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ZodRawShape } from 'zod';
-import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS } from '../policy.js';
+import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS, LOCAL_DRAFT_TOOLS } from '../policy.js';
 import type { PlytixClient } from '../client.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { decorateResult, outputSchemaForTool, type ToolResult } from '../results.js';
@@ -70,19 +70,20 @@ export function registerTool<TArgs extends Record<string, unknown>>(
   handler: (args: TArgs) => Promise<ToolResult>,
 ): void {
   const readOnly = READ_TOOLS.has(name);
-  if (!readOnly && !WRITE_TOOLS.has(name) && !KNOWLEDGE_WRITE_TOOLS.has(name)) throw new Error(`Unclassified tool: ${name}`);
-  if (!readOnly && !policies.get(server)?.has(name)) return;
+  const draftOnly = LOCAL_DRAFT_TOOLS.has(name);
+  if (!readOnly && !draftOnly && !WRITE_TOOLS.has(name) && !KNOWLEDGE_WRITE_TOOLS.has(name)) throw new Error(`Unclassified tool: ${name}`);
+  if (!readOnly && !draftOnly && !policies.get(server)?.has(name)) return;
   // Erase SDK/Zod recursive inference only at this boundary. SDK validates inputs.
   (server.registerTool as any)(name, {
     ...definition,
     outputSchema: outputSchemaForTool(name),
-    annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: true },
+    annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly && !draftOnly, idempotentHint: readOnly, openWorldHint: true },
   }, async (args: TArgs, extra: { signal: AbortSignal }) => {
     const started = new Date().toISOString();
     const client = clients.get(server)!;
     try {
       const execute = async (): Promise<ToolResult> => {
-        if (readOnly) {
+        if (readOnly || draftOnly) {
           const result = await handler(args);
           try { await knowledgeServices.get(server)?.observe(name, result); }
           catch {
@@ -121,7 +122,7 @@ export function registerTool<TArgs extends Record<string, unknown>>(
       };
       return await client.runOperation(async () =>
         decorateResult(name, await execute(), started, client.getReadEvidence()),
-      extra.signal, readOnly || KNOWLEDGE_WRITE_TOOLS.has(name) ? undefined : name);
+      extra.signal, readOnly || draftOnly || KNOWLEDGE_WRITE_TOOLS.has(name) ? undefined : name);
     } catch (error) {
       return decorateResult(name, toolError(error instanceof PlytixError || error instanceof KnowledgeError ? error.message : 'Tool execution failed'), started, []);
     }

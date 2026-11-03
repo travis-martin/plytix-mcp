@@ -53,7 +53,8 @@ try {
   await client.connect(transport);
   const catalog = await client.listTools();
   available = new Map(catalog.tools.map(tool => [tool.name, tool]));
-  if (catalog.tools.some(tool => tool.annotations?.readOnlyHint !== true)) throw new Error('Unexpected write exposure');
+  const localDrafts = new Set(['pricing_import', 'pricing_plan']);
+  if (catalog.tools.some(tool => tool.annotations?.readOnlyHint !== true && !localDrafts.has(tool.name))) throw new Error('Unexpected write exposure');
   await check('server_capabilities');
   await check('discovery_guide');
   await check('knowledge_status');
@@ -122,7 +123,11 @@ try {
     }
   }
   const checked = new Set(results.map(item => item.tool));
-  const unchecked = [...available.keys()].filter(name => !checked.has(name));
+  // Pricing requires a supplied document, reviewed mapping/rules, and private
+  // storage. Never fabricate a live import to satisfy catalog coverage.
+  const intentionallySkipped = [...available.keys()].filter(name => name.startsWith('pricing_'));
+  const unchecked = [...available.keys()].filter(name => !checked.has(name) && !intentionallySkipped.includes(name));
+  console.log(JSON.stringify({ intentionally_skipped: intentionallySkipped, reason: 'Pricing workflow uses fixture coverage; live run requires a reviewed document and storage.' }));
   const failures = results.filter(item => ['failed', 'protocol_failed', 'invariant_failed', 'unavailable'].includes(item.status));
   console.log(JSON.stringify({ summary: { advertised_read_tools: available.size, calls: results.length, failures: failures.length, limitations: results.filter(r => ['access_limited', 'partial'].includes(r.status)).length, unchecked } }));
   if (failures.length || unchecked.length) process.exitCode = 1;

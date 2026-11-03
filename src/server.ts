@@ -15,6 +15,7 @@ import { registerSchemaTools } from './tools/schema.js';
 import { registerInheritanceTools } from './tools/inheritance.js';
 import { registerDiscoveryTools, DISCOVERY_INSTRUCTIONS } from './tools/discovery.js';
 import { KnowledgeService } from './knowledge/service.js';
+import { registerPricingTools } from './tools/pricing.js';
 import type { KnowledgeRegistry } from './knowledge/registry.js';
 
 export function createServer(
@@ -37,5 +38,6 @@ export function createServer(
   registerSchemaTools(server, client);
   registerInheritanceTools(server, client);
   registerDiscoveryTools(server, client, knowledge);
+  registerPricingTools(server, client);
   return server;
 }

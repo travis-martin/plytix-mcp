@@ -5,7 +5,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { createHttpApp, loadHttpConfig, type HttpConfig } from '../http.js';
 import { PlytixClient } from '../client.js';
-import { READ_TOOLS, WRITE_TOOLS, parseWriteTools } from '../policy.js';
+import { DEFAULT_TOOLS, LOCAL_DRAFT_TOOLS, READ_TOOLS, WRITE_TOOLS, parseWriteTools } from '../policy.js';
 
 const headers = { 'Content-Type': 'application/json', Accept: 'application/json, text/event-stream',
   'X-Plytix-API-Key': 'fixture-key', 'X-Plytix-API-Password': 'fixture-password' };
@@ -33,8 +33,9 @@ describe('stateless Streamable HTTP', () => {
     try {
       expect(transport.sessionId).toBeUndefined();
       const list = await client.listTools();
-      expect(new Set(list.tools.map(t => t.name))).toEqual(READ_TOOLS);
-      expect(list.tools.every(t => t.annotations?.readOnlyHint)).toBe(true);
+      expect(new Set(list.tools.map(t => t.name))).toEqual(DEFAULT_TOOLS);
+      expect(list.tools.every(t => t.annotations?.readOnlyHint === READ_TOOLS.has(t.name))).toBe(true);
+      expect(list.tools.filter(t => LOCAL_DRAFT_TOOLS.has(t.name)).every(t => t.annotations?.destructiveHint === false)).toBe(true);
       const result = await client.callTool({ name: 'products_get', arguments: { product_id: 'fixture' } });
       expect(JSON.stringify(result)).toContain('FIXTURE');
       const invalid = await client.callTool({ name: 'products_get', arguments: { product_id: 4 } });
@@ -104,9 +105,9 @@ describe('stateless Streamable HTTP', () => {
     await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { ...headers, 'X-MCP-Token': token } } }));
     try {
       const tools = (await client.listTools()).tools;
-      expect(new Set(tools.map(t => t.name))).toEqual(new Set([...READ_TOOLS, ...WRITE_TOOLS]));
-      expect(tools).toHaveLength(READ_TOOLS.size + WRITE_TOOLS.size);
-      expect(tools.filter(t => !t.annotations?.readOnlyHint)).toHaveLength(WRITE_TOOLS.size);
+      expect(new Set(tools.map(t => t.name))).toEqual(new Set([...DEFAULT_TOOLS, ...WRITE_TOOLS]));
+      expect(tools).toHaveLength(DEFAULT_TOOLS.size + WRITE_TOOLS.size);
+      expect(tools.filter(t => !t.annotations?.readOnlyHint)).toHaveLength(WRITE_TOOLS.size + LOCAL_DRAFT_TOOLS.size);
     } finally { await client.close(); }
   });
 

@@ -61,6 +61,8 @@ export class PlytixClient {
     this.assertActive();
   }
   getReadEvidence(): ReadEvidence[] { return structuredClone(this.readEvidence); }
+  /** Force subsequent verification reads to reach the upstream API. */
+  clearOperationReadCache(): void { this.assertActive(); this.operationReads?.clear(); }
   checkOperationActive(): void { this.assertActive(); }
 
   private activeOperation?: Promise<unknown>;
