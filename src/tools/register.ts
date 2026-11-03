@@ -3,7 +3,7 @@ import type { ZodRawShape } from 'zod';
 import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS } from '../policy.js';
 import type { PlytixClient } from '../client.js';
 import type { KnowledgeService } from '../knowledge/service.js';
-import { decorateResult, outputSchema, type ToolResult } from '../results.js';
+import { decorateResult, outputSchemaForTool, type ToolResult } from '../results.js';
 import { PlytixError } from '../types.js';
 import { KnowledgeError } from '../knowledge/model.js';
 
@@ -75,7 +75,7 @@ export function registerTool<TArgs extends Record<string, unknown>>(
   // Erase SDK/Zod recursive inference only at this boundary. SDK validates inputs.
   (server.registerTool as any)(name, {
     ...definition,
-    outputSchema,
+    outputSchema: outputSchemaForTool(name),
     annotations: { readOnlyHint: readOnly, destructiveHint: !readOnly, idempotentHint: readOnly, openWorldHint: true },
   }, async (args: TArgs, extra: { signal: AbortSignal }) => {
     const started = new Date().toISOString();

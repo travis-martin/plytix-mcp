@@ -43,14 +43,18 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
 
         // If we have a selected match, fetch full product details
         let fullProduct = null;
+        let detailUnavailable = false;
         if (result.selected) {
           try {
             const productResult = await client.getProduct(result.selected.id);
             fullProduct = productResult.data?.[0] ?? null;
+            if (!fullProduct) detailUnavailable = true;
           } catch {
-            // Use the raw data from search if full fetch fails
-            fullProduct = result.selected.raw;
+            detailUnavailable = true;
           }
+          // Search evidence remains useful, but must never imply a successful
+          // detail read. Empty detail responses receive the same treatment.
+          if (detailUnavailable) fullProduct = result.selected.raw;
         }
 
         return {
@@ -70,19 +74,28 @@ export function registerProductTools(server: McpServer, client: PlytixClient) {
                       }
                     : null,
                   product: fullProduct,
-                  alternativeMatches: result.matches.slice(1, 5).map((m) => ({
+                  alternativeMatches: result.matches.filter(m => m.id !== result.selected?.id).slice(0, limit).map((m) => ({
                     id: m.id,
                     sku: m.sku,
                     label: m.label,
                     confidence: m.confidence,
                   })),
                   searchPlan: result.plan,
+                  retrieval: {
+                    status: !result.selected ? 'not_requested' : detailUnavailable ? 'unavailable' : 'available',
+                    source: !result.selected ? 'none' : detailUnavailable ? 'search_record' : 'product_detail',
+                  },
+                  ...(detailUnavailable ? { partial: true } : {}),
                 },
                 null,
                 2
               ),
             },
           ],
+          ...(detailUnavailable ? { resultMetadata: {
+            status: 'partial' as const, coverage: 'partial' as const,
+            warnings: ['Product detail could not be retrieved. The product contains search evidence only; verify current values before making changes.'],
+          } } : {}),
         };
       } catch (error) {
         return {
