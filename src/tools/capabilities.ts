@@ -13,8 +13,9 @@ export function registerCapabilityTools(server: McpServer) {
         documentation: 'https://apidocs.plytix.com/',
         reviewed_on: '2026-10-20',
         getting_started: {
-          pricing: ['pricing_import', 'pricing_rules_get', 'pricing_plan', 'pricing_plan_get'],
-          pricing_storage: 'PLYTIX_PRICING_DIR selects a private single-volume store. Rules, source snapshots, plans and execution audits are reviewable JSON. Hosted ephemeral storage is insufficient.',
+          pricing: ['pricing_guidance_get', 'pricing_dictionary_get', 'pricing_import', 'pricing_rules_get', 'pricing_plan', 'pricing_plan_get'],
+          pricing_storage: 'Persistent local or GCS storage holds reviewable JSON. Explicit PLYTIX_PRICING_SCOPE_BINDINGS share workflow guidance, rules and dictionary across bound credentials using the same backend. Imports, plans, reviews and audits stay credential-private. Without bindings, all files remain credential-private. Hosted ephemeral storage is insufficient.',
+          pricing_guidance: 'Required user instructions and enforced pricing exclusions are separate from learned advisory definitions. Read pricing_guidance_get before pricing; edit the complete document using revision-checked pricing_guidance_save. Current Plytix schema, inheritance and values remain authoritative.',
           guide: 'discovery_guide',
           dictionary: 'catalog_dictionary',
           shared_knowledge: 'knowledge_status',

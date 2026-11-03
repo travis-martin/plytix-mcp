@@ -18,7 +18,7 @@ approval, denial and cancellation controls are not changed.
 
 Both modes retain the named write allowlist, API-route enforcement, credential
 authentication, immutable validated arguments, cancellation and resource limits.
-Pricing retains fresh-plan checks, rule validation, inheritance checks, one-shot
+Pricing retains fresh-plan checks, rule and workflow guidance validation, inheritance checks, one-shot
 reservations, readback and audit records. Host mode does not authorize extra API
 endpoints or override upstream API-key permissions.
 
@@ -26,7 +26,9 @@ endpoints or override upstream API-key permissions.
 writes. `approval_check` shows no form in host mode and never claims verified
 human approval. A new server instance is required after configuration changes.
 Reconnect the MCP client after changing API keys so cached helper headers refresh;
-credential-scoped rules and plans are not automatically migrated to another key.
+credential-scoped records are not automatically migrated to another key. Explicit
+organization bindings can share reusable guidance without exposing private run
+records; see the durable pricing section below.
 
 ## Shared knowledge boundary (0.5)
 
@@ -66,7 +68,7 @@ See [knowledge operations and limitations](knowledge.md).
   `idempotentHint: false`. They save private source/plan files but receive no API
   mutation authority. Review row selections, modifications, rejections and notes
   are durable draft decisions, not permission to change Plytix. `pricing_review_get`
-  reads these decisions and their execution status. `pricing_rules_save`,
+  reads these decisions and their execution status. `pricing_guidance_save`, `pricing_rules_save`,
   `pricing_apply` and `pricing_review_apply` remain hidden until separately
   allowlisted and require exact host approval. Batch apply permits only product
   PATCH routes; it cannot create/delete products or reset inheritance.
@@ -75,7 +77,16 @@ See [knowledge operations and limitations](knowledge.md).
   compact scoped observations. Manual definitions and retirements are protected;
   current Plytix schema, family membership, inheritance and product values must be
   checked before reuse. No complete product or option-list snapshots belong there.
-- Every product, pricing-rule or shared-knowledge mutation requires a trusted approval provider to approve the
+- Protected `workflow.json` contains explicit owner instructions and structured
+  exclusions. Automatic learning never edits it. Full-document saves require a
+  current expected revision, preserve every existing ID, and retire records
+  explicitly. Structured exclusions check live owner and changed inheriting-child
+  evidence; unknown required evidence blocks a possibly protected update. Plans
+  bind the guidance digest and revision and cannot execute after a policy change.
+  Legacy unbound plans cannot execute when active guidance exists. Text instructions
+  are workflow obligations, not arbitrary executable rules. Exclusions constrain
+  pricing tools; they do not restrict unrelated enabled catalog write tools.
+- Every product, pricing-rule, protected-guidance or shared-knowledge mutation requires a trusted approval provider to approve the
   exact validated argument snapshot for that invocation. No `approved` tool
   argument, annotation, service token or previous approval grants this permission.
   Missing, rejected, cancelled, expired or failed approval stops before the handler.
@@ -145,8 +156,8 @@ installed. Cloud logging must not add header/body capture.
   or schema caching. Disconnects cancel fetches and retain
   the active slot until tool work finishes.
 - Write approval has its own 30-second deadline and a 16,000-character argument
-  review limit. Only `pricing_review_apply` permits 64,000 characters and uses
-  compact JSON; every exact manifest field is retained. Other tools keep their
+  review limit. `pricing_review_apply` and `pricing_guidance_save` permit 64,000
+  characters and use compact JSON; every exact argument field is retained. Other tools keep their
   formatted JSON and 16,000-character limit. Preparation reports the character
   count using the same serializer as the approval provider.
   A successfully approved write starts a fresh execution budget while retaining
@@ -278,11 +289,31 @@ bucket and takes precedence over the directory; errors never fall back to local
 files. Calls authenticate with Plytix before selecting a credential/endpoint hash
 scope. Operator configuration supplies the storage location, never tool arguments.
 
+Optional `PLYTIX_PRICING_SCOPE_BINDINGS` maps verified credential fingerprints to
+stable organization workspace IDs. When configured, missing membership fails
+closed, including for rotated credentials. Names, domains, catalog data and tool
+arguments never establish membership. Bind only credentials authorized to share
+the complete reusable pricing context. The bindings create no upstream API
+privileges and contain no raw credentials.
+
+Only `rules.json`, `rules-revision-*.json`, `dictionary.json` and `workflow.json`
+use the shared namespace. UUID imports, plans, reviews and execution audits keep
+their credential-private namespace and reservation state. No automatic migration
+occurs. Local and remote servers must use the same workspace binding and durable
+backend to share these records. A local file copy is not synchronized with GCS.
+Scope/backend metadata is returned by the guidance read tool without exposing
+credential fingerprints. See [pricing storage and migration](pricing-storage.md).
+
 GCS reads pin object generations; writes use generation compare-and-swap.
 Plan reservation is durable and single-use across competing processes and restarts.
 Rule history is committed atomically with current rules. All files are limited
 to 8 MiB. Storage conflicts may retry bounded state reads, but product mutations
 never automatically retry. A crashed/unknown execution stays consumed for review.
+Workflow guidance retains up to 20 prior revisions within a 2 MiB history budget;
+active instructions are never automatically evicted. Guidance editing through the
+workspace attaches a draft for the normal approval flow and never calls a save
+or product-write tool directly. Raw file edits bypass tool validation; prefer
+validated saves with revision checks and readback.
 Uploaded source extracts, pricing, conditions and review evidence are private
 business data; enforce host ACLs or private bucket access and approved retention.
 Google runtime access uses Application Default Credentials without packaged keys.

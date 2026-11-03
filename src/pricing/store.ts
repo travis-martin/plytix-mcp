@@ -2,9 +2,10 @@ import { join, resolve } from 'node:path';
 import { Storage, type Bucket } from '@google-cloud/storage';
 import { readBoundedJson, updateJsonFile } from '../knowledge/store.js';
 import { PlytixError } from '../types.js';
+import { isSharedPricingFile, pricingScopeStatus, resolvePricingScope, type PricingScopeStatus } from './scope.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
-const keyPattern = /^(?:rules|dictionary|rules-revision-\d+|[a-f0-9-]{36})\.json$/;
+const keyPattern = /^(?:rules|dictionary|workflow|rules-revision-\d+|[a-f0-9-]{36})\.json$/;
 function checkKey(key: string) {
   if (!keyPattern.test(key)) throw new PlytixError('Invalid pricing storage key');
 }
@@ -15,10 +16,30 @@ function encode(value: unknown) {
 }
 export interface PricingStore {
   readonly kind: 'file' | 'gcs';
+  readonly scope?: PricingScopeStatus;
   read(key: string): Promise<unknown | undefined>;
   create(key: string, value: unknown): Promise<void>;
   /** Change callbacks must be synchronous and side-effect free: CAS may retry. */
   update<T>(key: string, parse: (value: unknown | undefined) => T, change: (value: T) => T): Promise<T>;
+}
+
+/** Share only reusable organization guidance. UUID source/run documents and their
+ * execution reservations never move into a shared workspace automatically. */
+export class ScopedPricingStore implements PricingStore {
+  readonly kind: 'file' | 'gcs';
+  constructor(private shared: PricingStore, private personal: PricingStore, readonly scope: PricingScopeStatus) {
+    if (shared.kind !== personal.kind) throw new PlytixError('Pricing workspace and private records must use the same backend');
+    this.kind = shared.kind;
+  }
+  private target(key: string) {
+    checkKey(key);
+    return isSharedPricingFile(key) ? this.shared : this.personal;
+  }
+  read(key: string) { return this.target(key).read(key); }
+  create(key: string, value: unknown) { return this.target(key).create(key, value); }
+  update<T>(key: string, parse: (value: unknown | undefined) => T, change: (value: T) => T) {
+    return this.target(key).update(key, parse, change);
+  }
 }
 export class FilePricingStore implements PricingStore {
   readonly kind = 'file';
@@ -138,11 +159,16 @@ export class GcsPricingStore implements PricingStore {
 }
 
 export function createPricingStore(fingerprint: string, localRoot?: string): PricingStore {
+  const scope = resolvePricingScope(fingerprint);
   const bucket = process.env.PLYTIX_PRICING_GCS_BUCKET;
+  let makeStore: (namespace: string) => PricingStore;
   if (bucket) {
     if (!/^[a-z0-9][a-z0-9._-]{1,220}[a-z0-9]$/.test(bucket)) throw new PlytixError('Invalid cloud pricing bucket configuration');
-    return new GcsPricingStore(new GooglePricingObjects(bucket), fingerprint);
-  }
-  if (localRoot) return new FilePricingStore(join(resolve(localRoot), fingerprint));
-  throw new PlytixError('Pricing storage is not configured; set PLYTIX_PRICING_DIR or PLYTIX_PRICING_GCS_BUCKET');
+    const backend = new GooglePricingObjects(bucket);
+    makeStore = namespace => new GcsPricingStore(backend, namespace);
+  } else if (localRoot) makeStore = namespace => new FilePricingStore(join(resolve(localRoot), namespace));
+  else throw new PlytixError('Pricing storage is not configured; set PLYTIX_PRICING_DIR or PLYTIX_PRICING_GCS_BUCKET');
+  const privateStore = makeStore(scope.private_namespace);
+  const sharedStore = scope.shared_namespace === scope.private_namespace ? privateStore : makeStore(scope.shared_namespace);
+  return new ScopedPricingStore(sharedStore, privateStore, pricingScopeStatus(scope));
 }

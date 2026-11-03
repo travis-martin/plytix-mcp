@@ -8,6 +8,7 @@ import { calculate, parseCsv, withinChangeLimit } from './calculate.js';
 import { reviewBinding, reviewDocument } from './review-model.js';
 import { PricingMemory } from './memory.js';
 import { learnImport, learnPlan } from './learning.js';
+import { applicableInstructions, evaluatePricingExclusions, guidanceDigest, guidanceInstruction, hasActiveGuidance, readGuidance, type GuidanceDocument } from './guidance.js';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -17,11 +18,13 @@ function canonical(value: unknown): string {
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 function fail(message: string): never { throw new PlytixError(message); }
 const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), source_context: importInput.shape.source_context, rows: z.array(sourceRow).max(PRICING_LIMITS.import_rows), created_at: z.string() });
+const guidanceBinding = z.object({ revision: z.number().int().nonnegative(), digest: z.string().regex(/^[a-f0-9]{64}$/), instructions: z.array(guidanceInstruction).max(100) }).strict();
 export const storedPlan = z.object({
   plan_id: z.string().uuid(), digest: z.string(), created_at: z.string(), expires_at: z.string(),
   import_id: z.string().uuid(), rules_revision: z.number(), input: planInput,
   rules_digest: z.string(), source_digest: z.string(), rule_snapshot: z.array(ruleSchema),
   source_snapshot: docSchema,
+  guidance_binding: guidanceBinding.optional(),
   review_binding: reviewBinding.optional(),
   changes: z.array(changeSchema).max(PRICING_LIMITS.plan_changes), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), product_id: z.string().optional(), family_id: z.string().optional(), reason: z.string() })),
   state: z.enum(['draft', 'executing', 'complete', 'stopped', 'deferred']),
@@ -31,6 +34,9 @@ export type StoredPlan = z.infer<typeof storedPlan>;
 
 function valueOf(product: PlytixProduct, label: string): unknown {
   return Object.prototype.hasOwnProperty.call(product, `attributes.${label}`) ? product[`attributes.${label}`] : product.attributes?.[label];
+}
+function reviewEvidenceMatches(product: PlytixProduct, evidence: Record<string, unknown>, target: string, newValue: number): boolean {
+  return Object.entries(evidence).every(([label, expected]) => canonical(valueOf(product, label) ?? null) === canonical(label === target ? newValue : expected));
 }
 function canonicalName(value: string, aliases: PricingRule['associations'][number]['aliases']): string {
   const matches = aliases.filter(alias => alias.from.trim().toLowerCase() === value.trim().toLowerCase());
@@ -76,7 +82,8 @@ export class PricingService {
     const directory = await this.directory();
     const rules = await this.readRules(directory);
     const learning = rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
-    return { ...rules, learning, storage: directory.kind, sharing: 'Connections with different credentials have separate pricing files. Rules never authorize writes.' };
+    return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null,
+      sharing: `${directory.scope?.guidance ?? 'Pricing files are private to this credential pair.'} Rules never authorize writes.` };
   }
   async rulesSave(input: z.infer<typeof rulesInput>) {
     input = rulesInput.parse(input);
@@ -159,7 +166,7 @@ export class PricingService {
     }));
     return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, family_suggestions: [...families.values()], matches, lookup: { complete, pages, unique_skus: skus.length }, learning, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. Incomplete lookups do not establish unique matches. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
   }
-  private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule): Promise<PricingChange> {
+  private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule, guidance: GuidanceDocument): Promise<PricingChange> {
     if ((rule.effective_from && Date.now() < Date.parse(rule.effective_from)) || (rule.effective_until && Date.now() > Date.parse(rule.effective_until))) fail('Pricing rule is outside its reviewed effective time window');
     if (!rule.family_ids.includes(mapping.family_id)) fail('Selected family is outside the reviewed pricing rule');
     const product = (await this.client.getProduct(mapping.product_id)).data[0];
@@ -219,6 +226,11 @@ export class PricingService {
     if (manuallyModified && newValue !== Number(mapping.proposed_value)) fail('Manual proposed value exceeds the reviewed rounding precision');
     if (schema.type_class === 'IntegerAttribute' && !Number.isInteger(newValue)) fail('Calculated amount is not an integer');
     if (!withinChangeLimit(oldValue, newValue, rule.max_change_percent)) fail('Price change exceeds the reviewed change limit');
+    if (newValue !== oldValue) {
+      const policy = evaluatePricingExclusions(guidance, product, rule.target_attribute);
+      Object.assign(evidence, policy.evidence);
+      if (policy.blocked.length) fail(`Protected pricing exclusion: ${policy.blocked.map(item => `${item.id}: ${item.reason}`).join('; ')}`);
+    }
     const descendantImpact: PricingChange['descendant_impact'] = [];
     if (product.product_type === 'PARENT' || product.num_variations! > 0) {
       const expectedChildType = product.product_type === 'VARIANT' ? 'SUB_VARIANT' : 'VARIANT';
@@ -250,6 +262,11 @@ export class PricingService {
           const included = (typeof observed === 'string' || typeof observed === 'number') && condition.values.includes(String(observed));
           if ((typeof observed !== 'string' && typeof observed !== 'number') || (condition.operator === 'not_equals' ? included : !included)) fail('Descendant restriction is not satisfied');
         }
+        if (!overridden && newValue !== childValue) {
+          const policy = evaluatePricingExclusions(guidance, child, rule.target_attribute);
+          Object.assign(childEvidence, policy.evidence);
+          if (policy.blocked.length) fail(`Inherited update violates protected pricing exclusion for ${child.sku}: ${policy.blocked.map(item => `${item.id}: ${item.reason}`).join('; ')}`);
+        }
         descendantImpact.push({ product_id: child.id, sku: child.sku!, old_value: childValue, new_value: overridden ? childValue : newValue, overridden, review_evidence: childEvidence, evidence_digest: descendantEvidenceDigest(child, childEvidence) });
       }
       descendantImpact.sort((a, b) => a.product_id.localeCompare(b.product_id));
@@ -259,9 +276,18 @@ export class PricingService {
       currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence,
       evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, ownerAncestry, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
   }
-  private async build(input: z.infer<typeof planInput>, directory: PricingStore) {
+  private assertGuidance(plan: StoredPlan, guidance: GuidanceDocument) {
+    if (!plan.guidance_binding) {
+      if (hasActiveGuidance(guidance)) fail('This legacy plan does not include active protected workflow guidance; create a fresh reviewed plan');
+    } else if (plan.guidance_binding.revision !== guidance.revision || plan.guidance_binding.digest !== guidanceDigest(guidance)) {
+      fail('Protected workflow guidance changed after review; create a fresh reviewed plan');
+    }
+  }
+  private async build(input: z.infer<typeof planInput>, directory: PricingStore, existing?: StoredPlan) {
     const document = docSchema.parse(await directory.read(`${input.import_id}.json`));
     const rules = await this.readRules(directory);
+    const guidance = await readGuidance(directory);
+    if (existing) this.assertGuidance(existing, guidance);
     const selected = input.rule_ids.map(id => rules.rules.find(rule => rule.id === id && rule.status === 'confirmed') ?? fail('Only current confirmed pricing rules may calculate an update'));
     if (input.mappings.length * selected.length > PRICING_LIMITS.plan_changes || new Set(input.rule_ids).size !== input.rule_ids.length) fail(`A plan supports at most ${PRICING_LIMITS.plan_changes} unique product/attribute changes`);
     const changes: PricingChange[] = [], blocked: StoredPlan['blocked'] = [];
@@ -273,10 +299,13 @@ export class PricingService {
         const target = `${mapping.product_id}/${rule.target_attribute}`;
         if (targets.has(target)) fail('Duplicate source rows or rules target the same product attribute');
         targets.add(target);
-        changes.push(await this.inspect(row, document.sku_column, mapping, rule));
+        changes.push(await this.inspect(row, document.sku_column, mapping, rule, guidance));
       } catch (error) { blocked.push({ row_index: mapping.row_index, rule_id: rule.id, product_id: mapping.product_id, family_id: mapping.family_id, reason: error instanceof PlytixError ? error.message : 'Pricing evidence could not be verified' }); }
     }
-    return { changes, blocked, rules_revision: rules.revision, rules_digest: digest(rules), source_digest: digest(document), rule_snapshot: selected, source_snapshot: document };
+    // Old plans retain their historical digest only while no active guidance
+    // exists. Every newly prepared plan binds even an empty policy revision.
+    const binding = existing && !existing.guidance_binding ? {} : { guidance_binding: { revision: guidance.revision, digest: guidanceDigest(guidance), instructions: applicableInstructions(guidance, { source_context: document.source_context }).filter(instruction => !instruction.scope.family_ids.length || input.mappings.some(mapping => instruction.scope.family_ids.includes(mapping.family_id))) } };
+    return { changes, blocked, rules_revision: rules.revision, rules_digest: digest(rules), source_digest: digest(document), rule_snapshot: selected, source_snapshot: document, ...binding };
   }
   async plan(input: z.infer<typeof planInput>, binding?: z.infer<typeof reviewBinding>, options: { store?: PricingStore; persist?: boolean } = {}) {
     input = planInput.parse(input);
@@ -295,7 +324,8 @@ export class PricingService {
     const input = planInput.parse({ ...source.input, mappings });
     if (mappings.some(mapping => !source.input.mappings.some(original => canonical(original) === canonical(mapping)))) fail('Review partition changed its source mappings');
     const included = (item: { row_index: number; product_id?: string }) => mappings.some(mapping => mapping.row_index === item.row_index && mapping.product_id === item.product_id);
-    const built = { changes: source.changes.filter(included), blocked: source.blocked.filter(included), rules_revision: source.rules_revision, rules_digest: source.rules_digest, source_digest: source.source_digest, rule_snapshot: source.rule_snapshot, source_snapshot: source.source_snapshot };
+    const built = { changes: source.changes.filter(included), blocked: source.blocked.filter(included), rules_revision: source.rules_revision, rules_digest: source.rules_digest, source_digest: source.source_digest, rule_snapshot: source.rule_snapshot, source_snapshot: source.source_snapshot,
+      ...(source.guidance_binding ? { guidance_binding: { ...source.guidance_binding, instructions: source.guidance_binding.instructions.filter(instruction => !instruction.scope.family_ids.length || mappings.some(mapping => instruction.scope.family_ids.includes(mapping.family_id))) } } : {}) };
     const plan = storedPlan.parse({ ...source, ...built, plan_id: randomUUID(), input, review_binding: binding, digest: digest({ input, ...built }) });
     await this.put(directory, plan.plan_id, plan);
     return plan;
@@ -328,7 +358,7 @@ export class PricingService {
     const plan = storedPlan.parse(await directory.read(`${planId}.json`));
     if (plan.state !== 'draft' || plan.blocked.length || Date.parse(plan.expires_at) <= Date.now()) fail('Pricing plan is blocked, expired or consumed');
     await this.checkReviewBinding(plan, directory);
-    const fresh = await this.build(plan.input, directory);
+    const fresh = await this.build(plan.input, directory, plan);
     if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');
     return plan;
   }
@@ -351,7 +381,7 @@ export class PricingService {
     };
     try {
       await this.checkReviewBinding(plan, directory);
-      const fresh = await this.build(plan.input, directory);
+      const fresh = await this.build(plan.input, directory, plan);
       if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');
       for (const change of plan.changes) {
         if (change.old_value === change.new_value) { plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'unchanged' }); continue; }
@@ -360,9 +390,11 @@ export class PricingService {
         this.client.clearOperationReadCache();
         await this.checkReviewBinding(plan, directory);
         if (digest(await this.readRules(directory)) !== plan.rules_digest) fail('Pricing rules changed before execution; remaining updates stopped');
+        const guidance = await readGuidance(directory);
+        this.assertGuidance(plan, guidance);
         const rule = plan.rule_snapshot.find(item => item.id === change.rule_id)!;
         const mapping = plan.input.mappings.find(item => item.row_index === change.row_index && item.product_id === change.product_id)!;
-        const current = await this.inspect(plan.source_snapshot.rows[change.row_index], plan.source_snapshot.sku_column, mapping, rule);
+        const current = await this.inspect(plan.source_snapshot.rows[change.row_index], plan.source_snapshot.sku_column, mapping, rule, guidance);
         if (canonical(current) !== canonical(change)) fail('Product or inheritance changed before execution; remaining updates stopped');
         // Reuse the just-verified detail read inside this invocation to pin the
         // owner's structural identity as well as its numeric readback.
@@ -376,7 +408,8 @@ export class PricingService {
         const verified = (await this.client.getProduct(change.product_id)).data[0];
         if (!verified || verified.id !== change.product_id || verified.sku !== change.sku || verified.product_family_id !== change.family_id ||
             verified.num_variations !== change.descendant_impact.length || valueOf(verified, change.attribute) !== change.new_value ||
-            digest({ type: verified.product_type, parent: verified._parent_id, overrides: verified.overwritten_attributes }) !== ownerStructure) fail('Pricing readback failed; inspect actual state before any new plan');
+            digest({ type: verified.product_type, parent: verified._parent_id, overrides: verified.overwritten_attributes }) !== ownerStructure ||
+            !reviewEvidenceMatches(verified, change.review_evidence, change.attribute, change.new_value)) fail('Pricing readback failed; inspect actual state before any new plan');
         if (change.descendant_impact.length) {
           const ids = completeDescendantIds(verified, await this.client.getProductVariants(change.product_id)).sort();
           if (canonical(ids) !== canonical(change.descendant_impact.map(impact => impact.product_id).sort())) fail('Descendant membership changed during execution; inspect actual state before any new plan');
@@ -387,7 +420,8 @@ export class PricingService {
           const result = verifiedChildren[index];
           const child = result.status === 'fulfilled' ? result.value.data[0] : undefined;
           if (!child || child.id !== impact.product_id || !hasOverrideEvidence(child) || valueOf(child, change.attribute) !== impact.new_value ||
-              descendantEvidenceDigest(child, impact.review_evidence) !== impact.evidence_digest) fail('Descendant propagation or override readback failed; inspect actual state before any new plan');
+              descendantEvidenceDigest(child, impact.review_evidence) !== impact.evidence_digest ||
+              !reviewEvidenceMatches(child, impact.review_evidence, change.attribute, impact.new_value)) fail('Descendant propagation or override readback failed; inspect actual state before any new plan');
         }
         plan.results[plan.results.length - 1].status = 'verified';
         await persist();

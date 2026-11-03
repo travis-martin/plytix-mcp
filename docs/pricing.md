@@ -13,7 +13,8 @@ automatically confirms a learned business rule.
 
 ## Workflow
 
-1. Read the uploaded document with the host's document/spreadsheet reader. Preserve
+1. Read `pricing_guidance_get` before every pricing job, then read the uploaded
+   document with the host's document/spreadsheet reader. Preserve
    file name, original SHA-256, page/sheet/row references, currency, units, dates,
    conditions, restrictions and original SKU strings. CSV can be submitted directly.
    PDF/XLSX extraction is performed by the host, not this server. Visually verify
@@ -29,6 +30,8 @@ automatically confirms a learned business rule.
    that binary. Submitted CSV hashes are verified against the exact UTF-8 text.
 3. Present suggested families and explicit row-to-product/family mappings for
    review before calculating changes. Do not silently choose ambiguous products.
+   Read the applicable guidance again with those family IDs and source context;
+   include required instructions and protected exceptions in the review.
 4. Inspect `pricing_rules_get`. Rules contain family scope, source column, target
    attribute, currency/unit, arithmetic operations, rounding precision, minimum,
    maximum, maximum change percentage, associations, conditions and review fields.
@@ -85,10 +88,71 @@ automatically confirms a learned business rule.
    the server reaches its execution budget. Verified rows stay locked. Never blindly retry. A
    single-plan workflow can still use `pricing_apply` with its returned `plan_id`,
    `digest` and complete `changes`, under the same approval and verification rules.
-10. Automatically save compact document terminology, color/material meanings,
+10. Automatically save compact document terminology, brand/series/color/material meanings,
    family mapping clues and setup notes as scoped advisory definitions. Keep
-   calculations and restrictions in the reviewed rule set. Proposed rules and
+   calculations and source-specific conditions in the reviewed rule set, and
+   explicit owner instructions and enduring exclusions in protected workflow
+   guidance. Proposed rules and
    dictionary observations never calculate executable updates or authorize writes.
+
+## Protected workflow guidance and learning
+
+Three records have different responsibilities:
+
+| Record | Purpose | How it changes |
+| --- | --- | --- |
+| `workflow.json` | Required or recommended owner instructions, scoped exceptions, and structured pricing exclusions | Explicit `pricing_guidance_save` through the configured write approval flow |
+| `rules.json` | Reviewed arithmetic, conversion, rounding, source conditions, and target attributes | `pricing_rules_save` with the complete reviewed rule set |
+| `dictionary.json` | Supplier terminology and brand, series, color, material, family, and setup associations | Automatic proposed observations; explicit user definitions remain protected |
+
+User-maintained guidance takes precedence over inferred learning. Current Plytix
+remains authoritative for current catalog facts: attribute descriptions and
+options, families, inheritance owners, supplier slots, and product values. A
+catalog refresh does not cancel an owner's business exception. Resolve any
+conflict explicitly before proceeding. Text instructions guide the workflow;
+only the supported structured exclusions are enforced as hard stops by the
+pricing server. Neither text nor a dictionary entry executes arbitrary code or
+grants permission to write.
+
+`pricing_guidance_get` returns the revision, digest, applicable instructions and
+exclusions, plus storage scope and backend information. Optional `family_ids`
+and `source_context: {supplier?, source_namespace?}` narrow instruction review;
+global instructions remain included. Unknown source context does not hide a
+potentially applicable instruction. For editing, first read the entire document
+with `{include_retired: true}` and no filters; `complete_for_save` confirms this
+is a complete editable view. Save with `expected_revision`, the complete
+`instructions` array and the complete `exclusions` array. Every record needs a
+stable ID and `source_ref`. Preserve existing IDs and mark obsolete records
+`status: "retired"` explicitly instead of dropping them. A concurrent change
+rejects the save and requires a fresh read.
+
+In **Dictionary → Pricing workflow instructions and protections**, read the
+current document, inspect its scope and revision, and edit the complete JSON
+draft. **Request guidance save in conversation** attaches the exact requested
+change for the normal tool approval flow. It does not save guidance or update
+products. The editor rechecks the revision before handoff; the server checks
+again when saving. Reload after a successful save to verify the new revision.
+The JSON store is also directly reviewable by its operator. Prefer the tools for
+edits so revision checks, validation, locking, and history remain intact.
+
+Instructions can be global or scoped to families and source context. Exclusions
+use an explicit family list, optional exact target-attribute list (empty means
+all pricing targets), and up to five AND conditions using `equals` or `in` over
+current scalar attribute values. Missing or incompatible matching evidence
+blocks a possibly applicable exclusion; a known false condition establishes a
+nonmatch. The server checks the owner and every inheriting descendant whose
+value would change, preserving unchanged child overrides. Exclusions are
+pricing-workflow protections, not general restrictions on unrelated catalog
+write tools.
+
+Every new plan binds the guidance revision and digest, records applicable
+instructions, and rechecks live exclusion evidence before writing. Changing
+guidance requires fresh planning and review. Legacy plans without a guidance
+binding cannot execute once active guidance exists. The file retains up to 20
+previous revisions within a 2 MiB history budget; current instructions are never
+evicted automatically. Limits are 100 instructions and 32 exclusions, with a
+64,000-character compact exact save-argument limit. Keep the guidance concise
+and scoped; do not store copied catalog snapshots or current prices as memory.
 
 ## Supplier and inheritance review
 
@@ -177,11 +241,29 @@ are initialized until a pricing tool is used. Each API credential pair and endpo
 identity gets a separate hashed directory; calls authenticate before access. Tools
 never accept a directory or tenant ID. Keep the directory outside source control.
 It contains reviewable `rules.json`, immutable `rules-revision-N.json` snapshots,
-the bounded advisory `dictionary.json`,
+the protected `workflow.json`, the bounded advisory `dictionary.json`,
 source snapshots, durable line-review decisions, plans and per-change execution results. Plans preserve the rule
 and source snapshots used for review. Back up the directory and protect it with
 host ACLs. Different credentials do not automatically share rules. The file
 backend does not support distributed or ephemeral cloud filesystem storage.
+
+Organization sharing is optional and operator configured. Explicit verified
+credential bindings can route `rules.json`, its revision snapshots,
+`dictionary.json`, and `workflow.json` to one stable organization scope. Tool
+arguments cannot choose that scope. Imports, plans, review decisions, and
+execution records remain private to each credential identity. Without organization
+bindings, credentials retain their own stores. Once bindings are configured,
+unbound credentials are denied instead of falling back to another namespace.
+Bind only credentials belonging to the
+same organization; the server cannot infer that relationship from a name.
+
+Local and remote servers share guidance only when both are configured for the
+same organization scope **and the same durable storage backend**. Matching code
+versions or scope names alone do not synchronize files. An operator may use the
+same private Cloud Storage backend from both, with existing authorized access.
+If a local instance cannot access that backend, its local file is a separate
+copy and must be described as such. Check the storage metadata returned by
+`pricing_guidance_get` rather than assuming organization-wide persistence.
 
 Version 0.8.0 adds larger source/plan records and the `deferred` execution state.
 Version 0.7.1 cannot read those new records. Keep the private store and its audit
@@ -191,10 +273,19 @@ require a compatible 0.8.0-or-later reader. Preserve the approved bucket backup
 scope and verified execution history; do not restore an older snapshot as a way
 to replay consumed plans.
 
+Version 0.9.0 adds protected workflow guidance, plan guidance bindings and optional
+organization routing. Older binaries do not enforce these protections or resolve
+the new organization bindings. Once they are in use, keep every pricing writer
+on a compatible 0.9.0-or-later implementation. A rollback to older code requires
+disabling pricing writes and reviewing storage/guard compatibility first; preserving
+the files alone does not make an older writer enforce the new policy.
+
 For cloud hosting, set `PLYTIX_PRICING_GCS_BUCKET` to an existing approved private
 Google Cloud Storage bucket. That setting takes precedence over the local directory
 and fails closed on errors; it never silently falls back to ephemeral files.
-Objects use `pricing/<credential-fingerprint>/<name>.json`. Reads pin the object
+Objects use `pricing/<resolved-namespace>/<name>.json`, with credential namespaces
+for private records and the explicit organization namespace for shared files.
+Reads pin the object
 generation, and updates use `ifGenerationMatch` compare-and-swap. Reservations
 therefore remain one-shot across concurrent instances and restarts. Conflicts are
 retried at most five times by rereading and revalidating the state; product
@@ -314,7 +405,8 @@ does not increase that quota. [Plytix rate limits](https://docs.plytix.com/refer
   can request the whole selection and automatically fits at most 100 comparisons
   within its estimated request budget. Final `pricing_review_apply` manifests
   have a 64,000-character exact-argument limit and contain every selected amount
-  and descendant outcome. Other write forms retain their 16,000-character limit.
+  and descendant outcome. `pricing_guidance_save` also supports 64,000 compact
+  argument characters; other write forms retain their 16,000-character limit.
   Oversized selections are explicitly deferred with their decisions preserved;
   never truncate an approval preview or silently omit selected lines. After each
   completed batch, prepare the remaining selected lines for a new exact approval.

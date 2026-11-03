@@ -5,6 +5,8 @@ import { registerTool } from './register.js';
 import { applyInput, importInput, planInput, rulesInput, PRICING_LIMITS } from '../pricing/model.js';
 import { memoryGetInput, memoryUpdateInput } from '../pricing/memory.js';
 import { PricingDictionaryService } from '../pricing/dictionary.js';
+import { PricingGuidanceService } from '../pricing/guidance-service.js';
+import { guidanceGetInput, guidanceSaveInput } from '../pricing/guidance.js';
 import { PricingService } from '../pricing/service.js';
 import { PricingReviewService } from '../pricing/review.js';
 import { reviewApplyInput, reviewCreateInput, reviewGetInput, reviewPlanInput, reviewUpdateInput } from '../pricing/review-model.js';
@@ -18,6 +20,17 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   const pricing = new PricingService(client);
   const reviews = new PricingReviewService(client);
   const dictionary = new PricingDictionaryService(client);
+  const guidance = new PricingGuidanceService(client);
+  registerTool(server, 'pricing_guidance_get', {
+    title: 'Read Required Pricing Workflow Guidance',
+    description: 'Read BEFORE every pricing task. Returns protected user instructions and enforced pricing exclusions, current revision/digest and storage scope. Global instructions apply alongside family/source-specific guidance. Explicit business constraints take precedence over learned suggestions; live Plytix remains authoritative for catalog facts. For editing, load unfiltered with include_retired=true so no existing instruction is omitted.',
+    inputSchema: guidanceGetInput.shape,
+  }, async (args: z.infer<typeof guidanceGetInput>) => ({ ...json(await guidance.get(args)), resultMetadata: { source: 'local', freshness: 'cached' } }));
+  registerTool(server, 'pricing_guidance_save', {
+    title: 'Save Protected Pricing Workflow Guidance',
+    description: 'Save the complete user-reviewed instruction/exclusion set at expected_revision. Preserve every existing ID; retire explicitly instead of omitting. Requires this tool allowlist and normal host approval. Use only for explicit owner instructions or corrections; automatic learning belongs in proposed dictionary entries. Changes invalidate prepared pricing plans. Never changes products, grants writes or executes text.',
+    inputSchema: guidanceSaveInput.shape,
+  }, async (args: z.infer<typeof guidanceSaveInput>) => ({ ...json(await guidance.save(args)), resultMetadata: { source: 'local', freshness: 'not_applicable' } }));
   registerTool(server, 'pricing_dictionary_get', {
     title: 'Read Pricing Workflow Dictionary',
     description: 'Read private, paged supplier/source/family-scoped terminology, colors, materials, mappings and setup observations. All entries are advisory and require current Plytix validation. No product prices are stored here. Use scope to prevent reusing unrelated supplier meanings.',
@@ -34,7 +47,7 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     inputSchema: importInput.shape,
   }, async (args: z.infer<typeof importInput>) => json(await pricing.importDocument(args)));
   registerTool(server, 'pricing_rules_get', {
-    title: 'Review Pricing Rules', description: 'Read credential-scoped rules.json with versioned confirmed/proposed associations, conditions, calculations and restrictions.', inputSchema: {},
+    title: 'Review Pricing Rules', description: 'Read versioned confirmed/proposed calculation rules, conditions and restrictions with storage-scope metadata. Also read pricing_guidance_get for protected workflow instructions and exclusions.', inputSchema: {},
   }, async () => json(await pricing.rulesGet()));
   registerTool(server, 'pricing_rules_save', {
     title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at an expected revision. Requires exact host approval and pricing_rules_save allowlist. Proposed rules never calculate updates; marking confirmed requires reviewing the complete rule. Does not change Plytix products.', inputSchema: rulesInput.shape,

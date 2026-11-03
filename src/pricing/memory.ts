@@ -11,7 +11,7 @@ const label = z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/);
 const scopeFields = { supplier: text.optional(), source_namespace: text.optional(), family_id: text.optional() };
 export const memoryScope = z.object(scopeFields).strict().refine(value => Boolean(value.supplier || value.source_namespace), 'A supplier or source namespace is required');
 export const memoryValue = z.object({
-  kind: z.enum(['terminology', 'color', 'material', 'brand', 'supplier', 'family_mapping', 'attribute_setup', 'product_setup', 'review_attribute']),
+  kind: z.enum(['terminology', 'color', 'material', 'brand', 'series', 'supplier', 'family_mapping', 'attribute_setup', 'product_setup', 'review_attribute']),
   term: text,
   definition: z.string().trim().min(1).max(1200),
   scope: memoryScope,

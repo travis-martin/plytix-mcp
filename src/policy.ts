@@ -1,5 +1,5 @@
 export const WRITE_TOOLS = new Set([
-  'pricing_apply', 'pricing_rules_save', 'pricing_review_apply',
+  'pricing_apply', 'pricing_rules_save', 'pricing_review_apply', 'pricing_guidance_save',
   'products_create', 'products_update', 'products_assign_family',
   'products_set_attribute', 'products_clear_attribute',
   'families_create', 'families_link_attribute', 'families_unlink_attribute',
@@ -11,7 +11,7 @@ export const WRITE_TOOLS = new Set([
 export const READ_TOOLS = new Set([
   'catalog_workspace',
   'approval_capabilities', 'approval_check',
-  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_dictionary_get',
+  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_dictionary_get', 'pricing_guidance_get',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',

@@ -38,15 +38,18 @@ afterEach(async () => {
 });
 
 describe('write approval boundary', () => {
-  it('permits larger exact review manifests only for the explicit batch apply tool', () => {
-    expect(writeApprovalArgumentLimit('pricing_review_apply')).toBe(64_000);
-    for (const tool of WRITE_TOOLS) if (tool !== 'pricing_review_apply') expect(writeApprovalArgumentLimit(tool)).toBe(16_000);
+  it('permits larger exact snapshots only for batch application and complete protected guidance', () => {
+    const largeSnapshots = new Set(['pricing_review_apply', 'pricing_guidance_save']);
+    for (const tool of largeSnapshots) expect(writeApprovalArgumentLimit(tool)).toBe(64_000);
+    for (const tool of WRITE_TOOLS) if (!largeSnapshots.has(tool)) expect(writeApprovalArgumentLimit(tool)).toBe(16_000);
   });
-  it('preserves every field while compacting only batch approval arguments', () => {
+  it('preserves every field while compacting batch and guidance approval arguments', () => {
     const input = { plans: [{ plan_id: 'fixture', changes: [{ note: 'Quoted "value"\nwith newline', children: [{ old_value: 20, new_value: 30, override: false }] }] }] };
     const snapshot = serializeWriteApprovalArguments('pricing_review_apply', input);
     expect(JSON.parse(snapshot)).toEqual(input);
     expect(snapshot).toBe(JSON.stringify(input));
+    const guidance = { expected_revision: 1, instructions: [{ id: 'fixture', text: 'Quoted "value"\nwith newline' }], exclusions: [] };
+    expect(serializeWriteApprovalArguments('pricing_guidance_save', guidance)).toBe(JSON.stringify(guidance));
     expect(serializeWriteApprovalArguments('products_update', input)).toBe(JSON.stringify(input, null, 2));
   });
 
@@ -276,14 +279,17 @@ describe('per-tool API route policy', () => {
     ['relationships_set_quantity', 'PATCH', '/api/v2/products/id/relationships/relationship'],
   ];
   it('classifies every enabled mutation and rejects changed methods/routes', () => {
-    expect(new Set([...routes.map(([name]) => name), 'pricing_apply', 'pricing_review_apply', 'pricing_rules_save'])).toEqual(WRITE_TOOLS);
+    const storageOnly = ['pricing_rules_save', 'pricing_guidance_save'];
+    expect(new Set([...routes.map(([name]) => name), 'pricing_apply', 'pricing_review_apply', ...storageOnly])).toEqual(WRITE_TOOLS);
     for (const tool of ['pricing_apply', 'pricing_review_apply']) {
       expect(isWriteRequestForTool(tool, '/api/v2/products/p', 'PATCH')).toBe(true);
       expect(isWriteRequestForTool(tool, '/api/v2/products', 'POST')).toBe(false);
       expect(isWriteRequestForTool(tool, '/api/v2/products/p', 'DELETE')).toBe(false);
       expect(isWriteRequestForTool(tool, '/api/v2/products/p/variants/resync', 'POST')).toBe(false);
     }
-    for (const [, method, path] of routes) expect(isWriteRequestForTool('pricing_rules_save', path, method)).toBe(false);
+    for (const tool of storageOnly) {
+      for (const [, method, path] of routes) expect(isWriteRequestForTool(tool, path, method)).toBe(false);
+    }
     for (const [name, method, path] of routes) {
       expect(isWriteRequestForTool(name, path, method)).toBe(true);
       expect(isWriteRequestForTool(name, `${path}/unexpected`, method)).toBe(false);

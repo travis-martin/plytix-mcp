@@ -16,23 +16,42 @@ approval snapshots. Container variants can own inheritable prices; explicit
 child overrides are preserved and verified. `approval_check` tests the host's
 form input without approving or performing a data change.
 
+Protected owner instructions and pricing exceptions live in `workflow.json`.
+`pricing_guidance_get` reads them before each pricing job; `pricing_guidance_save`
+requires the complete current document, its expected revision and normal write
+approval. The Dictionary tab shows instructions, exclusions and storage scope,
+and can send an edited draft to the conversation for approval. Structured
+exclusions are enforced during planning and before writes. Required free-text
+instructions guide the workflow; they do not execute arbitrary code.
+
 Brand/supplier aliases, conditions, effective dates, calculation steps and important
-review attributes live in versioned JSON rules outside reusable code. Source
+review attributes live in versioned `rules.json` outside reusable code. Source
 snapshots and execution results are also retained. Proposed knowledge is never
-silently promoted to an executable rule. See [pricing workflow](docs/pricing.md)
-and [private remote setup](docs/remote-pricing.md).
+silently promoted to an executable rule or allowed to replace owner instructions.
+See [pricing workflow](docs/pricing.md) and [private remote setup](docs/remote-pricing.md).
 
 Imports accept up to 100 source rows with batched SKU searches. Reviews group
 compatible plans and size each approval batch to its request cost and payload;
 deferred selections remain available for subsequent reviewed batches. A bounded
-private `dictionary.json` retains supplier/source/family-scoped terminology and
-setup observations. Current Plytix data remains authoritative; stored dictionary
-entries do not execute calculations or grant write permission.
+private `dictionary.json` retains supplier/source/family-scoped terminology,
+brand, series, color and material associations, and setup observations. Current
+Plytix data remains authoritative for catalog facts; stored dictionary entries
+do not execute calculations, override business exceptions or grant write permission.
 
 Local storage uses private JSON files; optional Google Cloud Storage uses object
 generation checks for durable remote rules and one-shot execution reservation.
-Both transports share the same handlers. Authenticated HTTP form-approval sessions
-are opt-in; ordinary HTTP remains stateless with writes blocked without approval.
+Both transports share the same handlers. Organization sharing is opt-in through
+operator-managed credential bindings and a common durable backend. Only guidance,
+rules and the pricing dictionary are shared; source imports, plans, review
+decisions and execution audits stay credential-private. Local and remote servers
+do not synchronize merely by running the same version. See
+[persistent pricing workspaces](docs/pricing-storage.md).
+
+Version 0.9.0 provides 51 default read/draft tools and 24 separately allowlisted
+write tools (75 total when all catalog/pricing writes are enabled). Default form
+mode requires the supported approval integration; private operator connections
+can opt into host mode to use the trusted client's normal write permissions.
+Optional shared-knowledge proposal tools have a separate allowlist.
 
 MCP tools for interactive Plytix product QA, schema discovery, assets, families,
 variants and relationships. Complements existing synchronization systems.
@@ -82,6 +101,10 @@ client authentication and human approval UI compatibility still need verificatio
 | --- | --- |
 | `PLYTIX_API_KEY`, `PLYTIX_API_PASSWORD` | Required by stdio; HTTP uses request headers |
 | `PLYTIX_WRITE_TOOLS` | JSON array, default `[]`; exact mutation tool names only |
+| `MCP_WRITE_APPROVAL_MODE` | `form` by default; `host` delegates approval to the trusted private client's write permissions |
+| `PLYTIX_PRICING_DIR` | Private durable local JSON storage for pricing records |
+| `PLYTIX_PRICING_GCS_BUCKET` | Optional private Cloud Storage backend; takes precedence over the local directory |
+| `PLYTIX_PRICING_SCOPE_BINDINGS` | Optional operator-owned credential-fingerprint-to-workspace JSON map; configured membership fails closed |
 | `HOST`, `PORT` | Local `127.0.0.1:8080`; Cloud Run/container `0.0.0.0:$PORT` |
 | `MCP_AUTH_TOKEN` | Independent service secret; at least 32 characters, required for remote HTTP or any HTTP writes |
 | `MCP_ALLOWED_HOSTS` | Exact comma-separated hostnames without ports; defaults to loopback names |
@@ -140,9 +163,10 @@ missing taxonomy names/hierarchy.
 Use the [two-connection template](deploy/codex-stdio-modes.template.toml) for
 separate read-only and explicitly allowlisted write connections. Every mutation
 also requires approval of its exact arguments through a trusted host callback.
-The stdio entry point uses MCP form elicitation and refuses writes when the host
-cannot present that form. Standalone HTTP writes remain blocked without a
-trusted approval integration. The HTTP server is prepared for private deployment;
+Default form mode uses MCP form elicitation and refuses writes when the host
+cannot present that form. Opt-in host mode uses the trusted client's native
+tool permission flow for both stdio and authenticated HTTP; it does not verify
+that a human prompt was displayed. The HTTP server supports private deployment;
 multi-user OAuth, account authorization and a cloud approval gateway remain
 separate work before sharing a write-enabled service.
 

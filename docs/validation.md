@@ -1,5 +1,41 @@
 # Validation
 
+## Version 0.9.0 — November 3, 2026
+
+- Local typecheck/build and all 396 fixture tests across 34 files passed,
+  including protected guidance, organization isolation, enforcement and MCP
+  authorization/argument-limit integration checks.
+- The browser fixture passed 52 checks at 1440×1100 and 390×844. Guidance coverage
+  includes complete unfiltered reads, current revision/digest checks, retired
+  record preservation, exact edited handoffs, malformed/partial draft refusal,
+  and concurrent edits without losing the user's draft. The UI never directly
+  saves guidance or writes products.
+- Policy source defines 51 default read/draft tools and 24 separately enabled
+  catalog/pricing writes, for 75 standard tools with all those writes enabled.
+  Shared-knowledge proposals remain separately configured.
+- Portable archive validation and isolated startup pass: 10 files, four skills,
+  51 default tools and the workspace resource. The package test blocks network
+  requests and uses fixture credentials; injected credential/private files are
+  rejected by validation.
+
+Protected guidance is separate from learned dictionary observations and executable
+pricing rules. Fixtures cover custom exclusions, missing evidence, owner and
+inheriting-child impacts, preserved overrides, stale guidance, legacy plans and
+readback changes. Organization sharing is explicit: reusable files share a stable
+workspace only on the same backend, while imports, reviews, plans and execution
+records retain credential isolation. Local/browser checks use fixtures and do not
+establish upstream API write permissions or production throughput.
+
+This release is prepared locally. Remote v0.9.0 deployment, hosted readback and
+live catalog mutation are not claimed here; deployment needs separate exact
+action-time approval. Earlier release evidence below is historical and does not
+establish that the remote service is running v0.9.0.
+
+Older binaries do not enforce workflow guidance or organization bindings. After
+activation, use a compatible writer or disable pricing writes before rolling back
+to an older implementation; retain all private execution/audit records. See
+[storage compatibility](pricing.md#storage-and-activation).
+
 ## Version 0.8.0 — November 3, 2026
 
 - Implementation checkpoint: `8cd0989`, pushed to main and develop/cloud-run.

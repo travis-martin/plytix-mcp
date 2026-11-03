@@ -1,15 +1,15 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "plytix-catalog",
-  "version": "0.8.0",
-  "description": "Explore Plytix catalogs, explain inheritance, and review price-list updates with explicit approval and inspectable rules.",
+  "version": "0.9.0",
+  "description": "Explore Plytix catalogs and review price-list updates with explicit approval, editable workflow guidance, and reusable pricing rules.",
   "license": "MIT",
   "extensions": {
     "com.openai": {
       "interface": {
         "displayName": "Plytix Catalog",
         "shortDescription": "Catalog and pricing review",
-        "longDescription": "Discover catalog schema, inspect products and variants, and turn supplied price lists into reviewed updates using the existing Plytix MCP server.",
+        "longDescription": "Discover catalog schema, inspect product inheritance, and review price-list updates with protected workflow instructions and reusable terminology. Optional organization storage shares guidance while keeping pricing reviews private.",
         "category": "Business & Operations",
         "capabilities": [
           "Interactive"

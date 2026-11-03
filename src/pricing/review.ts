@@ -76,7 +76,7 @@ export class PricingReviewService {
     if (review.revision !== revision) fail('Review changed; reload the current revision');
     if (review.batches.some(batch => batch.state === 'executing')) fail('Review execution is in progress or uncertain; inspect its audit before editing');
   }
-  private async present(review: ReviewDocument, store: PricingStore, plans?: PlanCache) {
+  private async present(review: ReviewDocument, store: PricingStore, plans: PlanCache = new Map()) {
     const execution = await this.execution(review, store, plans);
     const lines = review.lines.map(line => ({ ...line, ...(execution.has(line.line_id) ? { execution: execution.get(line.line_id) } : {}) }));
     const counts: Record<string, number> = { total: lines.length, pending: 0, selected: 0, rejected: 0, needs_revision: 0, blocked: 0, unchanged: 0, awaiting_approval: 0, verified: 0, sending_or_unknown: 0, skipped: 0, executing: 0 };
@@ -85,7 +85,12 @@ export class PricingReviewService {
       if (line.execution) counts[line.execution.status] = (counts[line.execution.status] ?? 0) + (line.execution.status === line.status ? 0 : 1);
       if (line.status === 'selected' && !lockedStatuses.has(line.execution?.status ?? '')) counts.awaiting_approval++;
     }
-    return { ...review, lines, counts, approval_required: true, instructions: 'Row decisions are drafts. Modified amounts need recalculation and fresh selection. Only exact trusted approval can execute the selected manifest.' };
+    const guidance = new Map<string, NonNullable<StoredPlan['guidance_binding']>>();
+    for (const line of review.lines) {
+      const binding = plans.get(line.prepared_plan_id ?? line.plan_history.at(-1) ?? line.provenance.plan_id)?.guidance_binding;
+      if (binding) guidance.set(digest(binding), binding);
+    }
+    return { ...review, lines, counts, guidance_snapshots: [...guidance.values()], approval_required: true, instructions: 'Row decisions are drafts. Modified amounts need recalculation and fresh selection. Only exact trusted approval can execute the selected manifest. Workflow guidance shown here belongs to the saved plan revision; fresh preparation checks current protected guidance.' };
   }
   async get(id: string) { const store = await this.directory(); return this.present(await this.read(id, store), store); }
   async create(input: z.infer<typeof reviewCreateInput>) {

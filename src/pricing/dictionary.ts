@@ -12,7 +12,9 @@ export class PricingDictionaryService {
     return new PricingMemory(this.storeFactory(this.client.knowledgeFingerprint(), this.root));
   }
   async get(input: z.input<typeof memoryGetInput> = {}) {
-    return (await this.memory()).get(input);
+    await this.client.verifyKnowledgeAccess();
+    const store = this.storeFactory(this.client.knowledgeFingerprint(), this.root);
+    return { ...await new PricingMemory(store).get(input), storage_scope: store.scope ?? null, storage_backend: store.kind };
   }
   async update(input: z.input<typeof memoryUpdateInput>) {
     return (await this.memory()).update(input);
