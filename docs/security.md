@@ -71,7 +71,11 @@ See [knowledge operations and limitations](knowledge.md).
   reads these decisions and their execution status. `pricing_guidance_save`, `pricing_rules_save`,
   `pricing_apply` and `pricing_review_apply` remain hidden until separately
   allowlisted and require exact host approval. Batch apply permits only product
-  PATCH routes; it cannot create/delete products or reset inheritance.
+  PATCH routes plus the fixed `action: update` bulk-products payload; it cannot
+  create/delete products or reset inheritance. `pricing_review_refresh` can poll
+  and update the private audit, but has no product mutation authority.
+  Private `batch_rules` are calculation drafts bound into exact approved plans;
+  they do not modify or activate the shared rule store.
 - The pricing dictionary holds bounded advisory definitions, not executable rules.
   Imports, plans, rule reads/saves and live dictionary discovery automatically save
   compact scoped observations. Manual definitions and retirements are protected;
@@ -148,8 +152,8 @@ installed. Cloud logging must not add header/body capture.
   These are resource guards, not distributed
   account-wide quotas or a hard billing cap.
 - Ordinary tool operations: 45 seconds, 512 upstream authentication/API requests,
-  and 8 MiB cumulative upstream JSON. `pricing_plan`, `pricing_review_plan` and
-  `pricing_review_apply` receive 80 seconds, 4,096 requests and 64 MiB cumulative
+  and 8 MiB cumulative upstream JSON. `pricing_plan`, `pricing_review_plan`,
+  `pricing_review_apply` and `pricing_review_refresh` receive 80 seconds, 4,096 requests and 64 MiB cumulative
   upstream JSON, to inspect complete selected container/descendant batches.
   Each individual fetch, including response-body consumption, has a 15-second
   timeout. Upstream JSON remains limited to 5 MiB per response, before buffering
@@ -178,7 +182,10 @@ installed. Cloud logging must not add header/body capture.
   internal tool reads can still run in bounded parallel groups.
 - Reads retry at most once after 401 or 429. Rate-limit retry waits are capped at
   two seconds; longer Retry-After values return a rate-limit failure immediately.
-  No automatic network/5xx retries and no automatic mutation retries occur.
+  No automatic network/5xx retries occur. The pricing batch executor alone retries
+  writes after actual HTTP 429: it persists Retry-After, waits up to 30 seconds
+  within the operation deadline, and makes at most three attempts per invocation.
+  A longer delay leaves rows queued. There is no assumed account-specific pacing.
 
 Stdio honors the SDK operation cancellation signal: in-flight fetches are aborted
 and a cancelled operation cannot send a later API request. The next operation on

@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 
-const app = new App({ name: 'Plytix Catalog Workspace', version: '0.9.0' });
+const app = new App({ name: 'Plytix Catalog Workspace', version: '0.10.0' });
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id).value.trim();
 const status = (message: string, error = false) => { el('status').textContent = message; el('status').className = error ? 'notice error' : ''; };
@@ -181,7 +181,7 @@ el('rules-load').addEventListener('click', () => void action(async () => { const
 el('available-rules-load').addEventListener('click', () => void action(async () => {
   const result = await call('pricing_rules_get'); const target = clear('available-rules');
   const rules = (result.data.rules ?? []).filter((rule: any) => rule.status === 'confirmed');
-  if (!rules.length) { notice(target, 'No confirmed pricing rules are available. Review and save a rule through the conversation first.'); return; }
+  if (!rules.length) { notice(target, 'No saved confirmed rules are available. A one-run calculation can be prepared in the conversation without saving a shared rule.'); return; }
   const chosen = new Set(input('rule-ids').split(',').map(value => value.trim()).filter(Boolean));
   for (const rule of rules) {
     const label = element('label'); label.className = 'check';
@@ -266,8 +266,10 @@ function reviewData(result: any): Review {
   return data;
 }
 function isFinished(line: ReviewLine) {
-  return Boolean(line.execution && !['not_started', 'pending', 'skipped'].includes(line.execution.status));
+  return Boolean(line.execution && !['not_started', 'pending', 'skipped', 'failed', 'conflict'].includes(line.execution.status));
 }
+function reviewRunning() { return review?.batches?.some((batch: any) => ['executing', 'pending'].includes(batch.state)) ?? false; }
+function isLocked(line: ReviewLine) { return isFinished(line) || reviewRunning(); }
 function badge(label: string, kind: string) {
   const node = element('span', label); node.className = `pill ${/^[a-z_]+$/.test(kind) ? kind : 'neutral'}`; return node;
 }
@@ -281,18 +283,18 @@ function visibleReviewLines(): ReviewLine[] {
   if (!review) return [];
   const filter = input('review-filter'), query = input('review-search').toLocaleLowerCase();
   return review.lines.filter(line => {
-    if (filter !== 'all' && (filter === 'execution' ? !line.execution : line.status !== filter)) return false;
+    if (filter !== 'all' && (filter.startsWith('execution:') ? line.execution?.status !== filter.slice(10) : filter === 'execution' ? !line.execution : line.status !== filter)) return false;
     const c = line.change ?? {};
     return !query || [c.sku, c.product_id, c.attribute, c.source_ref, line.source?.source_name, line.source?.source_ref, line.provenance?.mapping?.product_id, line.instruction, line.reason, line.line_id].some(value => value !== undefined && text(value).toLocaleLowerCase().includes(query));
   });
 }
 function currentChecked(): ReviewLine[] { return review?.lines.filter(line => checkedLines.has(line.line_id)) ?? []; }
 function updateReviewSelection() {
-  const checked = currentChecked(), visible = visibleReviewLines(), editable = checked.filter(line => !isFinished(line));
+  const checked = currentChecked(), visible = visibleReviewLines(), editable = checked.filter(line => !isLocked(line));
   const hiddenCount = checked.filter(line => !visible.some(item => item.line_id === line.line_id)).length;
   el('review-selection-count').textContent = `${checked.length} checked${hiddenCount ? ` · ${hiddenCount} outside this filter` : ''}`;
   const box = el<HTMLInputElement>('review-select-visible');
-  const selectable = visible.filter(line => !isFinished(line));
+  const selectable = visible.filter(line => !isLocked(line));
   box.checked = selectable.length > 0 && selectable.every(line => checkedLines.has(line.line_id));
   box.indeterminate = !box.checked && selectable.some(line => checkedLines.has(line.line_id));
   box.disabled = !selectable.length;
@@ -303,7 +305,7 @@ function updateReviewSelection() {
   setDisabled(el<HTMLButtonElement>('review-recalculate'), !editable.length || editable.length !== checked.length || editable.some(line => !['pending', 'needs_revision'].includes(line.status)));
   const ready = review?.lines.filter(line => line.status === 'selected' && !isFinished(line)).length ?? 0;
   el('review-ready-count').textContent = `${ready} selected for approval`;
-  setDisabled(el<HTMLButtonElement>('review-prepare'), !ready);
+  setDisabled(el<HTMLButtonElement>('review-prepare'), !ready || reviewRunning());
   setDisabled(el<HTMLButtonElement>('review-prepare-checked'), !editable.length || editable.length !== checked.length || editable.some(line => line.status !== 'selected'));
   el('review-lines').querySelectorAll<HTMLInputElement>('input[data-line-id]').forEach(input => {
     input.checked = checkedLines.has(input.dataset.lineId!);
@@ -331,7 +333,31 @@ function renderReview(result: any, preservePrepared = false) {
   for (const [state, count] of executionCounts) { const item = element('div'); item.className = 'review-count'; item.append(element('strong', String(count)), element('span', `Execution: ${state.replaceAll('_', ' ')}`)); counts.append(item); }
   const unresolved = next.lines.filter(line => ['pending', 'needs_revision', 'blocked'].includes(line.status) && !isFinished(line)).length;
   const progress = el('review-progress'); progress.className = `review-progress${unresolved ? ' review-missing-decision' : ''}`;
-  progress.textContent = unresolved ? `${unresolved} line${unresolved === 1 ? '' : 's'} still need${unresolved === 1 ? 's' : ''} a decision or correction. Counts include every line, even when filtered.` : 'Every line has a review decision. Selected lines still require final exact approval before execution.';
+  progress.textContent = unresolved ? `${unresolved} line${unresolved === 1 ? '' : 's'} still need${unresolved === 1 ? 's' : ''} a decision or correction. Counts include every line, even when filtered.` : next.lines.every(line => ['verified', 'unchanged'].includes(line.execution?.status ?? line.status) || line.status === 'rejected') ? 'Every line is verified, unchanged, or rejected.' : 'Every line has a review decision. Check execution statuses for queued updates, validation, or exceptions.';
+  const batchPanel = clear('review-batch-status'), latest = next.batches?.at(-1);
+  if (latest) {
+    batchPanel.append(element('p', `Latest batch: ${latest.state.replaceAll('_', ' ')}`));
+    if (latest.error) { notice(batchPanel, latest.error); progress.textContent = 'The batch needs attention. Review its exception and each line status before continuing.'; }
+    if (reviewRunning()) notice(batchPanel, 'Execution or validation is pending. Refresh statuses or continue queued updates before revising the review.');
+    details(batchPanel, 'Batch history', next.batches);
+  }
+  if (next.prepared_transport) el<HTMLSelectElement>('review-transport').value = next.prepared_transport;
+  const continuationPanel = clear('review-continuations');
+  for (const continuation of next.continuations ?? []) {
+    const button = element('button', `Continue ${continuation.queued} queued updates`);
+    button.addEventListener('click', () => void action(async () => {
+      const instruction = 'Continue this previously reviewed batch through the trusted approval flow. Use the exact saved manifest; the server must send only queued rows. Do not resend submitted, verified, failed or uncertain rows. Ask before changing Plytix data.';
+      const payload = `${instruction}\n${JSON.stringify(continuation.approval, null, 2)}`;
+      const capabilities = app.getHostCapabilities();
+      if (capabilities?.message?.text) {
+        const sent = await app.sendMessage({ role: 'user', content: [{ type: 'text', text: payload }] });
+        if (sent.isError) throw new Error('The host did not accept the continuation request. The saved batch remains available.');
+      } else if (capabilities?.updateModelContext) await app.updateModelContext({ content: [{ type: 'text', text: payload }] });
+      else throw new Error('Continue the saved batch from the conversation.');
+      notice(continuationPanel, 'Continuation requested in the conversation. No product writes were sent by this workspace.');
+    }));
+    continuationPanel.append(button);
+  }
   renderReviewLines();
   select({ kind: 'pricing_review', ...result, data: next });
 }
@@ -347,7 +373,7 @@ function renderReviewLines() {
   const body = element('tbody');
   for (const line of visible) {
     const c = line.change ?? {}, row = element('tr'); row.dataset.lineId = line.line_id;
-    const checkCell = element('td'), checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'line-check'; checkbox.dataset.lineId = line.line_id; checkbox.disabled = isFinished(line); checkbox.setAttribute('aria-label', `Select ${c.sku ?? line.line_id} ${c.attribute ?? 'line'} for batch actions`);
+    const checkCell = element('td'), checkbox = document.createElement('input'); checkbox.type = 'checkbox'; checkbox.className = 'line-check'; checkbox.dataset.lineId = line.line_id; checkbox.disabled = isLocked(line); checkbox.setAttribute('aria-label', `Select ${c.sku ?? line.line_id} ${c.attribute ?? 'line'} for batch actions`);
     checkbox.addEventListener('change', () => { if (checkbox.checked) checkedLines.add(line.line_id); else checkedLines.delete(line.line_id); updateReviewSelection(); }); checkCell.append(checkbox); row.append(checkCell);
     const state = element('td'); state.className = 'line-status'; state.append(badge(decisionLabels[line.status] ?? line.status, line.status));
     if (line.execution) { state.append(element('small', 'Execution'), badge(line.execution.status.replaceAll('_', ' '), line.execution.status)); if (line.execution.message) state.append(element('small', line.execution.message)); }
@@ -357,6 +383,7 @@ function renderReviewLines() {
     if (c.product_id ?? line.provenance?.mapping?.product_id) product.append(element('small', c.product_id ?? line.provenance?.mapping?.product_id));
     if (c.inheritance_level) product.append(element('small', `Owner: ${inheritanceLevel(c.inheritance_level)}`));
     if (c.family_id) product.append(element('small', `Family: ${c.family_id}`));
+    if (c.material_group) { product.append(element('small', `Material group: ${c.material_group.identifier}`)); details(product, 'Supplier and raw-stock group', c.material_group); }
     if (line.instruction) { const instruction = element('p', line.instruction); instruction.className = 'line-instruction'; product.append(element('small', 'Instruction'), instruction); }
     row.append(product);
     const values = element('td'); values.className = 'line-values amount';
@@ -384,9 +411,9 @@ function renderReviewLines() {
     }
     row.append(source);
     const actions = element('td'); actions.className = 'line-actions'; const buttons = element('div'); buttons.className = 'row-actions';
-    const addAction = (label: string, work: () => Promise<void>, disabled = false) => { const button = element('button', label) as HTMLButtonElement; button.type = 'button'; button.disabled = disabled || isFinished(line); button.addEventListener('click', () => void action(work)); buttons.append(button); };
+    const addAction = (label: string, work: () => Promise<void>, disabled = false) => { const button = element('button', label) as HTMLButtonElement; button.type = 'button'; button.disabled = disabled || isLocked(line); button.addEventListener('click', () => void action(work)); buttons.append(button); };
     addAction('Select for approval', () => decideReview([line.line_id], 'selected'), !line.change || !['pending', 'selected'].includes(line.status));
-    const edit = element('button', 'Modify / instruct') as HTMLButtonElement; edit.type = 'button'; edit.disabled = isFinished(line); edit.addEventListener('click', () => beginRevision([line.line_id])); buttons.append(edit);
+    const edit = element('button', 'Modify / instruct') as HTMLButtonElement; edit.type = 'button'; edit.disabled = isLocked(line); edit.addEventListener('click', () => beginRevision([line.line_id])); buttons.append(edit);
     if (line.instruction?.trim()) addAction('Send instructions', () => sendInstructions([line.line_id]), !app.getHostCapabilities()?.message?.text && !app.getHostCapabilities()?.updateModelContext);
     addAction('Reject', () => decideReview([line.line_id], 'rejected'), line.status === 'rejected');
     if (line.status !== 'pending') addAction('Reset to pending', () => decideReview([line.line_id], 'pending'));
@@ -444,9 +471,9 @@ bindForm('review-create-form', async () => {
   if (!ids.length) throw new Error('Enter at least one calculated plan ID.');
   checkedLines.clear(); renderReview(await call('pricing_review_create', { plan_ids: ids, ...(input('review-title') ? { title: input('review-title') } : {}) }));
 });
-el('review-refresh').addEventListener('click', () => void action(async () => { if (review) renderReview(await call('pricing_review_get', { review_id: review.review_id })); }));
+el('review-refresh').addEventListener('click', () => void action(async () => { if (review) renderReview(await call('pricing_review_refresh', { review_id: review.review_id })); }));
 el('review-filter').addEventListener('change', renderReviewLines); el('review-search').addEventListener('input', renderReviewLines);
-el('review-select-visible').addEventListener('change', () => { const checked = el<HTMLInputElement>('review-select-visible').checked; for (const line of visibleReviewLines().filter(line => !isFinished(line))) { if (checked) checkedLines.add(line.line_id); else checkedLines.delete(line.line_id); } updateReviewSelection(); });
+el('review-select-visible').addEventListener('change', () => { const checked = el<HTMLInputElement>('review-select-visible').checked; for (const line of visibleReviewLines().filter(line => !isLocked(line))) { if (checked) checkedLines.add(line.line_id); else checkedLines.delete(line.line_id); } updateReviewSelection(); });
 el('review-select-approval').addEventListener('click', () => void action(() => decideReview([...checkedLines], 'selected')));
 el('review-reject').addEventListener('click', () => void action(() => decideReview([...checkedLines], 'rejected')));
 el('review-reset').addEventListener('click', () => void action(() => decideReview([...checkedLines], 'pending')));
@@ -457,7 +484,7 @@ el('review-prepare').addEventListener('click', () => void action(() => prepareRe
 el('review-prepare-checked').addEventListener('click', () => void action(() => prepareReview([...checkedLines], true)));
 async function prepareReview(lineIds?: string[], forApproval = false) {
   if (!review) return;
-  const result = await call('pricing_review_plan', { review_id: review.review_id, expected_revision: review.revision, ...(lineIds ? { line_ids: lineIds } : {}) });
+  const result = await call('pricing_review_plan', { review_id: review.review_id, expected_revision: review.revision, transport: input('review-transport'), ...(lineIds ? { line_ids: lineIds } : {}) });
   if (result.data?.review) renderReview({ ...result, data: result.data.review });
   else renderReview(await call('pricing_review_get', { review_id: review.review_id }));
   checkedLines.clear(); updateReviewSelection();

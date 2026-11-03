@@ -5,7 +5,7 @@ import { PricingReviewService } from '../pricing/review.js';
 import { guidanceDocument, guidanceExclusion, guidanceInstruction, type GuidanceDocument } from '../pricing/guidance.js';
 import { ruleSchema } from '../pricing/model.js';
 import type { PricingStore } from '../pricing/store.js';
-import type { PlytixProduct } from '../types.js';
+import { PlytixError, type PlytixProduct } from '../types.js';
 
 afterEach(() => vi.restoreAllMocks());
 class FixtureStore implements PricingStore {
@@ -32,7 +32,13 @@ async function fixture(count = 1, descendants = 0) {
   const root: PlytixProduct = { id: 'root', sku: 'ROOT', product_type: 'PARENT', product_family_id: 'f', num_variations: count };
   const all = [...products, ...children, root];
   vi.spyOn(client, 'verifyKnowledgeAccess').mockResolvedValue();
-  vi.spyOn(client, 'searchProducts').mockResolvedValue({ data: structuredClone(products), pagination: { page: 1, page_size: 100, pages: 1, total: count } });
+  vi.spyOn(client, 'searchProducts').mockImplementation(async input => {
+    const family = input.filters?.flat().find(filter => filter.field === 'product_family_id')?.value;
+    const found = family ? all.filter(product => product.product_family_id === family) : products;
+    const page = input.pagination?.page ?? 1, size = input.pagination?.page_size ?? 100;
+    return { data: structuredClone(found.slice((page - 1) * size, page * size)), pagination: { page, page_size: size, pages: Math.ceil(found.length / size), total: found.length } };
+  });
+  vi.spyOn(client, 'submitPricingBulk').mockRejectedValue(new PlytixError('Bulk unavailable', 405));
   vi.spyOn(client, 'getProduct').mockImplementation(async id => ({ data: structuredClone(all.filter(product => product.id === id)) }));
   vi.spyOn(client, 'getFamily').mockResolvedValue({ data: [{ id: 'f', name: 'Family' }] });
   vi.spyOn(client, 'getFamilyAllAttributes').mockResolvedValue({ data: [{ id: 'a', label: 'cost', name: 'Cost', attribute_level: descendants ? 'variant_level' : 'parent_level' }] });

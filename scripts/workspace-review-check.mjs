@@ -31,6 +31,8 @@ check('Every line is visible', await frame.locator('.review-table > tbody > tr')
 check('Pending totals remain visible', (await frame.locator('#review-progress').innerText()).includes('4 lines still need'));
 const row = id => frame.locator(`tr[data-line-id="line-${id}"]`);
 check('Original source cell is visible', (await row('A').innerText()).includes('Source cell: Price') && (await row('A').innerText()).includes('Fixture supplier price list.pdf'));
+check('Material grouping is visible', (await row('A').innerText()).includes('MATERIAL-A'));
+await frame.locator('#review-transport').selectOption('patch');
 const batchCheck = async ids => { for (const id of ids) await row(id).locator('input[type=checkbox]').check(); };
 await batchCheck(['A', 'B']);
 await frame.locator('#review-select-approval').click();
@@ -83,6 +85,7 @@ await frame.getByRole('button', { name: 'Request final approval in conversation'
 await page.waitForFunction(() => window.fixtureMessage?.content?.[0]?.text?.includes('trusted final exact-action'));
 check('Conversation request does not claim approval', (await page.evaluate(() => window.fixtureMessage)).content[0].text.includes('not approval'));
 check('Server exact approval manifest is attached', (await page.evaluate(() => window.fixtureContext)).content[0].text.includes('pricing_review_apply'));
+check('Transport choice is included in exact approval', (await page.evaluate(() => window.fixtureContext)).content[0].text.includes('"transport": "patch"'));
 check('No apply or catalog writes from UI', !(await page.evaluate(() => window.fixtureCalls)).some(call => /apply|products_update|pricing_rules_save/.test(call.name)));
 await page.screenshot({ path: `${directory}/pricing-review-approval.png`, fullPage: false });
 await frame.locator('#review-heading').scrollIntoViewIfNeeded();
@@ -129,6 +132,30 @@ await page.setViewportSize({ width: 390, height: 844 });
 await frame.locator('#review-workspace').scrollIntoViewIfNeeded();
 await page.screenshot({ path: `${directory}/pricing-review-mobile.png`, fullPage: false });
 check('Mobile document does not overflow horizontally', await frame.locator('body').evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+await page.setViewportSize({ width: 1440, height: 1100 });
+await page.evaluate(() => window.fixturePendingBatch());
+await frame.locator('#review-refresh').click();
+await frame.locator('#review-batch-status').filter({ hasText: 'Latest batch: pending' }).waitFor();
+check('Refresh uses the read-only validation tool', (await page.evaluate(() => window.fixtureCalls)).at(-1).name === 'pricing_review_refresh');
+check('Pending execution prevents edits to queued lines', await row('C').getByRole('button', { name: 'Modify / instruct', exact: true }).isDisabled());
+for (const state of ['verified', 'validation_pending', 'queued', 'failed', 'conflict', 'sending_or_unknown', 'submitted']) {
+  await frame.locator('#review-filter').selectOption(`execution:${state}`);
+  check(`Execution filter: ${state}`, await frame.locator('.review-table > tbody > tr').count() === 1);
+}
+check('Filtered statuses retain all-line totals', (await frame.locator('#review-counts').innerText()).includes('7'));
+await frame.locator('#review-filter').selectOption('all');
+await frame.getByRole('button', { name: 'Continue 1 queued updates', exact: true }).click();
+await page.waitForFunction(() => window.fixtureMessage?.content?.[0]?.text?.includes('Continue this previously reviewed batch'));
+check('Continuation requests exact approval without sending product writes', (await page.evaluate(() => window.fixtureMessage)).content[0].text.includes('"transport": "patch"') && !(await page.evaluate(() => window.fixtureCalls)).some(call => /apply|products_update/.test(call.name)));
+await page.evaluate(() => window.fixtureBatchException());
+await frame.locator('#review-refresh').click();
+await frame.locator('#review-batch-status').filter({ hasText: 'An excluded product changed' }).waitFor();
+check('Batch-wide exceptions stay visible beyond line outcomes', (await frame.locator('#review-progress').innerText()).includes('needs attention'));
+await frame.locator('#review-heading').scrollIntoViewIfNeeded();
+await page.screenshot({ path: `${directory}/pricing-batch-status-desktop.png`, fullPage: false });
+await page.setViewportSize({ width: 390, height: 844 });
+check('Batch controls fit the mobile document', await frame.locator('body').evaluate(node => node.scrollWidth <= node.clientWidth + 1));
+await page.screenshot({ path: `${directory}/pricing-batch-status-mobile.png`, fullPage: false });
 await page.setViewportSize({ width: 1440, height: 1100 });
 await page.evaluate(() => window.fixtureLargeReview());
 await frame.locator('#review-refresh').click();

@@ -39,8 +39,12 @@ automatically confirms a learned business rule.
    list to propose or confirm rules. This is separately allowlisted and requires
    exact host approval. Existing rules are not removed implicitly. No brand,
    supplier, conversion, margin, tax or discount default is supplied.
-5. Call `pricing_plan` with `import_id`, confirmed `rule_ids`, and explicit
+5. Call `pricing_plan` with `import_id`, confirmed `rule_ids` or private
+   `batch_rules`, and explicit
    `mappings: [{row_index, product_id, family_id}]` (zero-based row indexes).
+   One-run `batch_rules` use the same calculation/restriction schema but are
+   saved only inside the private plan. They never activate or save shared rules;
+   posting still requires approval of the exact proposed values.
    Inspect old/new values, source rows, exact rule snapshot, inheritance evidence,
    blocked reasons and unchanged values. A plan lasts 30 minutes and contains at
    most 100 product/attribute comparisons. Group compatible mappings in one call.
@@ -66,6 +70,8 @@ automatically confirms a learned business rule.
    before reconsidering them. Every decision revision invalidates prepared plans.
 8. Call `pricing_review_plan` without `line_ids` to prepare the currently selected
    lines, or prepare a checked subset of selected lines with explicit `line_ids`.
+   Choose `transport: "auto"` (default), `"bulk"` or `"patch"`. This selection is
+   part of the exact approval manifest and cannot change after approval.
    The server automatically fits the next batch to the comparison, estimated
    request and exact manifest limits. Read `batching` for requested, prepared and
    deferred counts and reasons. Deferred lines keep their decisions for a later
@@ -80,20 +86,22 @@ automatically confirms a learned business rule.
    final approval request. Resolve the stated reason; saved decisions remain.
 9. Invoke the separately allowlisted `pricing_review_apply` with the exact
    server-produced manifest, subject to trusted action-time approval. The server
-   rechecks all selected plans before any write, reserves each plan once, posts
-   each change and reads back its inherited effects. A failure stops remaining
-   changes. Reopen `pricing_review_get` or refresh workspace statuses to inspect
-   verified, skipped, executing or uncertain results. A `deferred` result leaves
-   untouched selections available for a new preparation and exact approval after
-   the server reaches its execution budget. Verified rows stay locked. Never blindly retry. A
+   validates selected plans against one fresh family snapshot, reserves the batch,
+   submits its inheritance owners, and validates results together. Read
+   `pricing_review_get` for saved status; use `pricing_review_refresh` (also the
+   workspace's Refresh statuses button) to poll the saved job and refresh final
+   validation without sending product writes. Queued rows can resume through
+   the same exact approved manifest; submitted, verified and uncertain rows
+   are never reposted. See [batch execution](pricing-batches.md) for status and
+   recovery details. A
    single-plan workflow can still use `pricing_apply` with its returned `plan_id`,
    `digest` and complete `changes`, under the same approval and verification rules.
 10. Automatically save compact document terminology, brand/series/color/material meanings,
    family mapping clues and setup notes as scoped advisory definitions. Keep
    calculations and source-specific conditions in the reviewed rule set, and
    explicit owner instructions and enduring exclusions in protected workflow
-   guidance. Proposed rules and
-   dictionary observations never calculate executable updates or authorize writes.
+   guidance. Proposed shared rules and dictionary observations never authorize
+   writes. Private batch calculations still require exact approval of each update.
 
 ## Protected workflow guidance and learning
 
@@ -280,6 +288,12 @@ on a compatible 0.9.0-or-later implementation. A rollback to older code requires
 disabling pricing writes and reviewing storage/guard compatibility first; preserving
 the files alone does not make an older writer enforce the new policy.
 
+Version 0.10.0 adds private batch calculations, durable bulk jobs and continuations.
+Keep pricing writers on 0.10.0 or later while these records are active. Older
+writers cannot interpret their reservations safely. Disable pricing writes before
+rolling back and reconcile pending jobs with a compatible reader; never restore
+an old record to replay a consumed plan.
+
 For cloud hosting, set `PLYTIX_PRICING_GCS_BUCKET` to an existing approved private
 Google Cloud Storage bucket. That setting takes precedence over the local directory
 and fails closed on errors; it never silently falls back to ephemeral files.
@@ -289,7 +303,8 @@ Reads pin the object
 generation, and updates use `ifGenerationMatch` compare-and-swap. Reservations
 therefore remain one-shot across concurrent instances and restarts. Conflicts are
 retried at most five times by rereading and revalidating the state; product
-mutations themselves are never retried. All objects are limited to 8 MiB.
+ambiguous mutations are never retried. The batch executor may retry a rejected
+HTTP 429 after its Retry-After interval. All objects are limited to 8 MiB.
 Current rules and prior rule revisions are saved atomically together in `rules.json`;
 extra immutable `rules-revision-N.json` copies are for convenient inspection.
 
@@ -358,22 +373,20 @@ attributes. Import matching combines SKU filters, checks exact identifiers and
 accounts for pagination rather than assuming a first-page match is unique.
 [Plytix search reference](https://docs.plytix.com/reference/v1-v2/products-v2-beta/search-products/)
 
-Preparation groups compatible rows so rules, source documents and repeated live
-reads can be reused within the invocation. Product values are not cached across
-operations. Final guards and readback still reach Plytix. The documented update
-route patches one product at a time; the workflow keeps writes sequential and
-verifies each owner and its inherited effects before continuing.
-[Plytix update reference](https://docs.plytix.com/reference/v1-v2/products-v2-beta/update-product/)
+Preparation and execution use bounded, paginated family snapshots. Product values
+are not cached across operations. The reviewed batch executor prefers one bulk
+job, with sequential per-owner PATCH as a fallback. It validates owners and
+descendants together after submission, avoiding per-owner GET/readback loops.
+See [contracts, grouping and recovery](pricing-batches.md).
 
 Review preparation returns `batching` with `requested`, `prepared`,
 `deferred_count`, `deferred_line_ids`, `reasons`, `max_changes`,
 `estimated_api_requests` and `max_estimated_api_requests`. Its current execution
 estimate envelope is 2,048 API requests, below the operation's 4,096-request hard
-ceiling. It includes the full preflight, fresh plan rebuild, final guard, write
-and readback, allowing compatible selections to fill the comparison and manifest
-limits while accounting for inherited effects. The estimate is planning
+ceiling. It conservatively allows for preflight, metadata, writes and final
+validation; compatible selections share the actual family reads. The estimate is planning
 information, not a guarantee that every batch finishes before its time budget.
-Untouched rows can be cleanly deferred for a new prepared batch. Plytix limits
+Unsent rows can resume under their original exact manifest. Plytix limits
 vary by account and apply over both 10-second and hourly intervals; a larger batch
 does not increase that quota. [Plytix rate limits](https://docs.plytix.com/reference/v1-v2/rate-limits/)
 
@@ -393,11 +406,13 @@ does not increase that quota. [Plytix rate limits](https://docs.plytix.com/refer
   Incomplete/paged listings, non-leaf descendants or unknown/off inheritance block
   the plan. There is no guessed pagination or equality-only inheritance inference.
   The system never changes families or creates an inherited parent-price override.
-- Storage uses exclusive locks and atomic replacements on one volume. A crashed
-  plan remains consumed/executing and needs inspection; stale locks are not stolen.
-- Preflight and per-change rechecks reduce races but Plytix does not provide an
+- Storage uses exclusive locks/atomic replacements locally and generation CAS in
+  GCS. Batch leases prevent concurrent senders. An interrupted sending checkpoint
+  remains uncertain; lease recovery does not authorize another write.
+- Fresh batch preflight reduces races but Plytix does not provide an
   atomic compare-and-set through this workflow. External edits can race a write.
-  There is no transaction, automatic rollback, or automatic mutation retry.
+  There is no transaction or automatic rollback. Only a definite HTTP 429 can
+  trigger a delayed write retry; timeouts and ambiguous server failures cannot.
 - `sending_or_unknown` means a request might have been accepted. Inspect current
   data and saved audit before generating a replacement plan. A successful PATCH
   alone is insufficient; only matching readback records `verified`.

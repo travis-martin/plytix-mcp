@@ -22,6 +22,11 @@ Product v2 reads can return asset/category IDs instead of hydrated objects.
 separately. V2 create/update responses may contain only IDs and audit timestamps;
 they are not full product snapshots.
 
+Reviewed pricing batches additionally use v1 bulk update/job routes through a
+fixed numeric-attribute adapter. See [batch contract and verification limits](pricing-batches.md).
+Bulk availability is account-dependent and has not been mutation-tested here;
+the approved manifest can select automatic PATCH fallback or an explicit transport.
+
 `products_get_full` accepts `include` with any of `family`, `variants`,
 `categories`, and `assets`. Omission preserves the original full expansion;
 `include: []` reads only the product. Unrequested sections are omitted.

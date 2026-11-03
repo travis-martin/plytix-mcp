@@ -47,7 +47,7 @@ decisions and execution audits stay credential-private. Local and remote servers
 do not synchronize merely by running the same version. See
 [persistent pricing workspaces](docs/pricing-storage.md).
 
-Version 0.9.0 provides 51 default read/draft tools and 24 separately allowlisted
+Version 0.10.0 provides 52 default read/draft tools and 24 separately allowlisted
 write tools (75 total when all catalog/pricing writes are enabled). Default form
 mode requires the supported approval integration; private operator connections
 can opt into host mode to use the trusted client's normal write permissions.

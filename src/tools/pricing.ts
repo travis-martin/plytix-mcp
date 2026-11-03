@@ -53,7 +53,7 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at an expected revision. Requires exact host approval and pricing_rules_save allowlist. Proposed rules never calculate updates; marking confirmed requires reviewing the complete rule. Does not change Plytix products.', inputSchema: rulesInput.shape,
   }, async (args: z.infer<typeof rulesInput>) => json(await pricing.rulesSave(args)));
   registerTool(server, 'pricing_plan', {
-    title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule IDs to calculate differences against live numeric values, inheritance and restrictions. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,
+    title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule_ids or private one-run batch_rules to calculate differences against live numeric values, inheritance and restrictions. batch_rules do not save or activate shared rules and still require exact approval of final changes. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,
   }, async (args: z.infer<typeof planInput>) => json(await pricing.plan(args)));
   registerTool(server, 'pricing_plan_get', {
     title: 'Read Pricing Plan and Audit', description: 'Read a private saved plan, exact proposed updates, blocked reasons, and execution/readback audit. Never retries writes.', inputSchema: { plan_id: z.string().uuid() },
@@ -67,6 +67,9 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   registerTool(server, 'pricing_review_get', {
     title: 'Read Price Review Status', description: 'Read every line decision and latest execution/readback status, including pending, rejected, revised, blocked, selected, verified and uncertain lines. Never retries writes.', inputSchema: reviewGetInput.shape,
   }, async ({ review_id }: z.infer<typeof reviewGetInput>) => json(await reviews.get(review_id)));
+  registerTool(server, 'pricing_review_refresh', {
+    title: 'Validate Submitted Price Updates', description: 'Poll existing bulk jobs and validate owners, children, overrides and preserved fields using paginated reads. Updates the private audit only. Never submits, retries or resumes product writes; queued changes require the exact approved pricing_review_apply manifest.', inputSchema: reviewGetInput.shape,
+  }, async ({ review_id }: z.infer<typeof reviewGetInput>) => json(await reviews.refresh(review_id)));
   registerTool(server, 'pricing_review_update', {
     title: 'Revise Price Review Decisions', description: 'Save individual or batch draft selections, rejections, instructions and exact proposed amounts using the current review revision. Modified amounts require an instruction and fresh recalculation/selection. No Plytix changes; clears previous prepared approval snapshots.', inputSchema: reviewUpdateInput.shape,
   }, async (args: z.infer<typeof reviewUpdateInput>) => json(await reviews.update(args)));
@@ -74,6 +77,6 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     title: 'Prepare Selected Review Lines', description: 'Recalculate selected lines (or explicit line IDs) against current catalog, rules, inheritance and overrides. Group compatible plans and automatically size the next batch to execution and approval limits. Return batching/deferred counts, fresh review and exact approval arguments. Changed evidence returns to pending. No Plytix changes.', inputSchema: reviewPlanInput.shape,
   }, async (args: z.infer<typeof reviewPlanInput>) => json(await reviews.plan(args)));
   registerTool(server, 'pricing_review_apply', {
-    title: 'Apply Selected Reviewed Prices', description: 'After exact trusted host approval, verify the complete server-produced batch manifest and all selected plans before writing. Update only approved inheritance owners; preserve child overrides; persist each outcome and stop on uncertainty. Requires pricing_review_apply allowlist; PATCH products only. Never retry uncertain lines.', inputSchema: reviewApplyInput.shape,
+    title: 'Apply Selected Reviewed Prices', description: 'After exact trusted host approval, verify the complete server-produced manifest against one fresh family snapshot. Submit approved inheritance owners in one bulk update or fast per-owner PATCH fallback, then validate owners, children, overrides and preserved fields together. Transport auto/bulk/patch is part of approval. Resume only unsent rows of the same manifest; never replay submitted or uncertain writes. Only actual HTTP 429 triggers backoff. Requires pricing_review_apply allowlist.', inputSchema: reviewApplyInput.shape,
   }, async (args: z.infer<typeof reviewApplyInput>) => json(await reviews.apply(args)));
 }

@@ -9,6 +9,7 @@ import { reviewBinding, reviewDocument } from './review-model.js';
 import { PricingMemory } from './memory.js';
 import { learnImport, learnPlan } from './learning.js';
 import { applicableInstructions, evaluatePricingExclusions, guidanceDigest, guidanceInstruction, hasActiveGuidance, readGuidance, type GuidanceDocument } from './guidance.js';
+import { materialGroup, PricingSnapshot, stockLabels } from './snapshot.js';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -26,6 +27,8 @@ export const storedPlan = z.object({
   source_snapshot: docSchema,
   guidance_binding: guidanceBinding.optional(),
   review_binding: reviewBinding.optional(),
+  execution_batch_id: z.string().uuid().optional(),
+  execution_batch_revision: z.number().int().nonnegative().optional(),
   changes: z.array(changeSchema).max(PRICING_LIMITS.plan_changes), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), product_id: z.string().optional(), family_id: z.string().optional(), reason: z.string() })),
   state: z.enum(['draft', 'executing', 'complete', 'stopped', 'deferred']),
   results: z.array(z.object({ product_id: z.string(), attribute: z.string(), status: z.string() })),
@@ -133,7 +136,9 @@ export class PricingService {
       const response = await this.client.searchProducts({ filters: skus.map(sku => [{ field: 'sku', operator: 'eq', value: sku }]), attributes: ['sku', 'product_family_id'], pagination: { page, page_size: PRICING_LIMITS.search_page_size } });
       pages++;
       const pagination = response.pagination;
-      const total = pagination?.total ?? pagination?.total_count;
+      // Some accounts return a catalog-wide total_count for filtered searches.
+      // Exhaust the bounded query and honor explicit total/pages when present.
+      const total = pagination?.total;
       if (response.meta?.complete === false || (pagination?.page !== undefined && pagination.page !== page) ||
           (expectedTotal !== undefined && total !== undefined && total !== expectedTotal) ||
           (expectedPages !== undefined && pagination?.pages !== undefined && pagination.pages !== expectedPages) ||
@@ -166,17 +171,17 @@ export class PricingService {
     }));
     return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, family_suggestions: [...families.values()], matches, lookup: { complete, pages, unique_skus: skus.length }, learning, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. Incomplete lookups do not establish unique matches. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
   }
-  private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule, guidance: GuidanceDocument): Promise<PricingChange> {
+  private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule, guidance: GuidanceDocument, snapshot?: PricingSnapshot): Promise<PricingChange> {
     if ((rule.effective_from && Date.now() < Date.parse(rule.effective_from)) || (rule.effective_until && Date.now() > Date.parse(rule.effective_until))) fail('Pricing rule is outside its reviewed effective time window');
     if (!rule.family_ids.includes(mapping.family_id)) fail('Selected family is outside the reviewed pricing rule');
-    const product = (await this.client.getProduct(mapping.product_id)).data[0];
+    const product = (snapshot ? snapshot.result(mapping.product_id) : await this.client.getProduct(mapping.product_id)).data[0];
     if (!product || product.id !== mapping.product_id || product.sku !== row.values[skuColumn].trim() || product.product_family_id !== mapping.family_id) fail('Product identity or family does not match the reviewed document mapping');
     if (!['SINGLE', 'STANDALONE', 'VARIANT', 'PARENT'].includes(product.product_type ?? '')) fail('Deeper variant or unknown product levels require a separately reviewed descendant-impact workflow');
     if (product.product_type !== 'VARIANT' && product._parent_id) fail('Product ancestry is inconsistent');
     if (product.product_type === 'VARIANT' && !product._parent_id) fail('Variant parent is unavailable');
     if (!Number.isInteger(product.num_variations) || product.num_variations! < 0 || product.num_variations! > 10) fail('A bounded explicit descendant count from zero to ten is required');
     if (!['PARENT', 'VARIANT'].includes(product.product_type!) && product.num_variations !== 0) fail('Non-container products must report a zero descendant count');
-    const family = await this.client.getFamilyAllAttributes(mapping.family_id);
+    const family = snapshot?.families.get(mapping.family_id) ?? await this.client.getFamilyAllAttributes(mapping.family_id);
     const candidates = family.data.filter(attribute => attribute.id && attribute.label === rule.target_attribute);
     if (candidates.length !== 1) fail('Attribute inheritance configuration is missing or ambiguous');
     const attribute = candidates[0];
@@ -188,16 +193,18 @@ export class PricingService {
     // record with a matching value or a particular SKU prefix.
     let ownerAncestry: Record<string, unknown> | undefined;
     if (product.product_type === 'VARIANT') {
-      const parent = (await this.client.getProduct(product._parent_id!)).data[0];
+      const parent = (snapshot ? snapshot.result(product._parent_id!) : await this.client.getProduct(product._parent_id!)).data[0];
       if (!parent || parent.id !== product._parent_id || parent.id === product.id || parent.product_type !== 'PARENT' ||
           parent._parent_id || parent.product_family_id !== product.product_family_id) fail('Variant inheritance owner requires a verified root parent in the same family');
       ownerAncestry = { id: parent.id, product_type: parent.product_type, parent: parent._parent_id, family: parent.product_family_id };
     }
     // Fetch schema by observed ID, bypassing the client's cross-call label cache.
-    const schema = await this.client.getAttributeById(attribute.id!);
+    const schema = snapshot?.schemas.get(attribute.id!) ?? await this.client.getAttributeById(attribute.id!);
     if (!schema || schema.label !== rule.target_attribute || !['NumberAttribute', 'DecimalAttribute', 'IntegerAttribute'].includes(schema.type_class)) fail('Target must be a current supported numeric attribute');
     if (row.values[rule.currency_column] !== rule.currency || row.values[rule.unit_column] !== rule.unit) fail('Document currency or unit differs from the reviewed rule');
     const evidence: Record<string, unknown> = {};
+    const stockFields = stockLabels.filter(label => family.data.some(a => a.label === label) || valueOf(product, label) !== undefined);
+    for (const label of stockFields) evidence[label] = valueOf(product, label) ?? null;
     const requiredLabels = new Set([...rule.review_attributes, ...rule.associations.map(a => a.attribute), ...rule.conditions.filter(c => c.source === 'product').map(c => c.field)]);
     for (const label of requiredLabels) {
       evidence[label] = valueOf(product, label);
@@ -234,11 +241,11 @@ export class PricingService {
     const descendantImpact: PricingChange['descendant_impact'] = [];
     if (product.product_type === 'PARENT' || product.num_variations! > 0) {
       const expectedChildType = product.product_type === 'VARIANT' ? 'SUB_VARIANT' : 'VARIANT';
-      const listing = await this.client.getProductVariants(product.id);
+      const listing = snapshot ? snapshot.variants(product.id) : await this.client.getProductVariants(product.id);
       const ids = completeDescendantIds(product, listing);
       // The validated owner bounds this group to ten independent reads. Preserve
       // listing order while reducing the latency of inheritance verification.
-      const children = await Promise.allSettled(ids.map(id => this.client.getProduct(id)));
+      const children = await Promise.allSettled(ids.map(id => snapshot ? Promise.resolve(snapshot.result(id)) : this.client.getProduct(id)));
       if (children.some(child => child.status === 'rejected')) fail('Descendant reads could not be completed');
       for (const [index, id] of ids.entries()) {
         const result = children[index];
@@ -253,6 +260,9 @@ export class PricingService {
           if (typeof current !== 'string' || canonicalName(current, association.aliases) !== canonicalName(row.values[association.column], association.aliases)) fail('Descendant association is outside the reviewed rule');
         }
         const childEvidence: Record<string, unknown> = {};
+        for (const label of stockFields) childEvidence[label] = valueOf(child, label) ?? null;
+        const ownerGroup = materialGroup(product, rule);
+        if (!overridden && ownerGroup && materialGroup(child, rule)?.key !== ownerGroup.key) fail('Inherited descendant has a different material, supplier or raw-stock cost basis');
         for (const label of requiredLabels) {
           childEvidence[label] = valueOf(child, label);
           if (childEvidence[label] === undefined || childEvidence[label] === null) fail('Descendant review attribute is unavailable');
@@ -274,6 +284,7 @@ export class PricingService {
     return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue,
       ...(manuallyModified ? { calculated_value: calculatedValue } : {}), ...(mapping.review_note ? { review_note: mapping.review_note } : {}),
       currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence,
+      ...(materialGroup(product, rule) ? { material_group: materialGroup(product, rule) } : {}),
       evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, ownerAncestry, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
   }
   private assertGuidance(plan: StoredPlan, guidance: GuidanceDocument) {
@@ -283,12 +294,13 @@ export class PricingService {
       fail('Protected workflow guidance changed after review; create a fresh reviewed plan');
     }
   }
-  private async build(input: z.infer<typeof planInput>, directory: PricingStore, existing?: StoredPlan) {
+  private async build(input: z.infer<typeof planInput>, directory: PricingStore, existing?: StoredPlan, snapshot?: PricingSnapshot) {
     const document = docSchema.parse(await directory.read(`${input.import_id}.json`));
     const rules = await this.readRules(directory);
     const guidance = await readGuidance(directory);
     if (existing) this.assertGuidance(existing, guidance);
-    const selected = input.rule_ids.map(id => rules.rules.find(rule => rule.id === id && rule.status === 'confirmed') ?? fail('Only current confirmed pricing rules may calculate an update'));
+    const selected = [...input.rule_ids.map(id => rules.rules.find(rule => rule.id === id && rule.status === 'confirmed') ?? fail('Only current confirmed pricing rules may calculate an update')), ...(input.batch_rules ?? [])];
+    if (!selected.length || new Set(selected.map(rule => rule.id)).size !== selected.length) fail('Choose unique saved rule IDs or private batch calculation rules');
     if (input.mappings.length * selected.length > PRICING_LIMITS.plan_changes || new Set(input.rule_ids).size !== input.rule_ids.length) fail(`A plan supports at most ${PRICING_LIMITS.plan_changes} unique product/attribute changes`);
     const changes: PricingChange[] = [], blocked: StoredPlan['blocked'] = [];
     const targets = new Set<string>();
@@ -299,7 +311,7 @@ export class PricingService {
         const target = `${mapping.product_id}/${rule.target_attribute}`;
         if (targets.has(target)) fail('Duplicate source rows or rules target the same product attribute');
         targets.add(target);
-        changes.push(await this.inspect(row, document.sku_column, mapping, rule, guidance));
+        changes.push(await this.inspect(row, document.sku_column, mapping, rule, guidance, snapshot));
       } catch (error) { blocked.push({ row_index: mapping.row_index, rule_id: rule.id, product_id: mapping.product_id, family_id: mapping.family_id, reason: error instanceof PlytixError ? error.message : 'Pricing evidence could not be verified' }); }
     }
     // Old plans retain their historical digest only while no active guidance
@@ -307,11 +319,11 @@ export class PricingService {
     const binding = existing && !existing.guidance_binding ? {} : { guidance_binding: { revision: guidance.revision, digest: guidanceDigest(guidance), instructions: applicableInstructions(guidance, { source_context: document.source_context }).filter(instruction => !instruction.scope.family_ids.length || input.mappings.some(mapping => instruction.scope.family_ids.includes(mapping.family_id))) } };
     return { changes, blocked, rules_revision: rules.revision, rules_digest: digest(rules), source_digest: digest(document), rule_snapshot: selected, source_snapshot: document, ...binding };
   }
-  async plan(input: z.infer<typeof planInput>, binding?: z.infer<typeof reviewBinding>, options: { store?: PricingStore; persist?: boolean } = {}) {
-    input = planInput.parse(input);
+  async plan(input: z.input<typeof planInput>, binding?: z.infer<typeof reviewBinding>, options: { store?: PricingStore; persist?: boolean; snapshot?: PricingSnapshot } = {}) {
     const directory = options.store ?? await this.directory();
-    const built = await this.build(input, directory);
-    const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: input.import_id, input, ...built, ...(binding ? { review_binding: reviewBinding.parse(binding) } : {}), state: 'draft', results: [] };
+    const parsed = planInput.parse(input);
+    const built = await this.build(parsed, directory, undefined, options.snapshot);
+    const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input: parsed, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: parsed.import_id, input: parsed, ...built, ...(binding ? { review_binding: reviewBinding.parse(binding) } : {}), state: 'draft', results: [] };
     if (options.persist !== false) await this.put(directory, plan.plan_id, plan);
     // Grouped review previews also refresh advisory setup once per group.
     const learning = await this.learnSafely(() => learnPlan(new PricingMemory(directory), { ...plan.source_snapshot, changes: plan.changes, rules: plan.rule_snapshot }));
@@ -320,7 +332,7 @@ export class PricingService {
   /** Split a freshly calculated internal snapshot without rereading the same
    * source or catalog. Apply still rebuilds and freshly checks every write. */
   async saveReviewSubset(source: StoredPlan, mappings: z.infer<typeof planInput>['mappings'], binding: z.infer<typeof reviewBinding>, directory: PricingStore) {
-    if (source.state !== 'draft' || source.input.rule_ids.length !== 1 || Date.parse(source.expires_at) <= Date.now()) fail('Only a fresh single-rule review snapshot can be partitioned');
+    if (source.state !== 'draft' || source.rule_snapshot.length !== 1 || Date.parse(source.expires_at) <= Date.now()) fail('Only a fresh single-rule review snapshot can be partitioned');
     const input = planInput.parse({ ...source.input, mappings });
     if (mappings.some(mapping => !source.input.mappings.some(original => canonical(original) === canonical(mapping)))) fail('Review partition changed its source mappings');
     const included = (item: { row_index: number; product_id?: string }) => mappings.some(mapping => mapping.row_index === item.row_index && mapping.product_id === item.product_id);
@@ -334,6 +346,66 @@ export class PricingService {
     z.string().uuid().parse(planId);
     const directory = store ?? await this.directory();
     return storedPlan.parse(await directory.read(`${planId}.json`));
+  }
+  async batchSnapshot(plans: StoredPlan[], store?: PricingStore) {
+    const directory = store ?? await this.directory();
+    const guidance = await readGuidance(directory);
+    return new PricingSnapshot(this.client).load(plans.flatMap(p => p.input.mappings.map(m => m.family_id)), plans.flatMap(p => p.rule_snapshot), guidance);
+  }
+
+  /** Recheck the immutable manifest in memory against one fresh catalog snapshot. */
+  async checkBatch(plans: StoredPlan[], snapshot: PricingSnapshot, targets?: Set<string>, store?: PricingStore) {
+    const directory = store ?? await this.directory();
+    const rules = await this.readRules(directory), guidance = await readGuidance(directory);
+    const conflicts = new Map<string, string>();
+    for (const plan of plans) {
+      this.assertGuidance(plan, guidance);
+      if (digest(docSchema.parse(await directory.read(`${plan.import_id}.json`))) !== plan.source_digest ||
+          (plan.input.rule_ids.length && digest(rules) !== plan.rules_digest)) fail('Source or saved pricing rules changed after approval');
+      for (const change of plan.changes) {
+        const key = `${change.product_id}/${change.attribute}`;
+        if (targets && !targets.has(key)) continue;
+        try {
+          const rule = plan.rule_snapshot.find(r => r.id === change.rule_id)!;
+          const mapping = plan.input.mappings.find(m => m.product_id === change.product_id && m.row_index === change.row_index)!;
+          const fresh = await this.inspect(plan.source_snapshot.rows[change.row_index], plan.source_snapshot.sku_column, mapping, rule, guidance, snapshot);
+          if (canonical(fresh) !== canonical(change)) fail('Product, raw-stock basis, supplier or inheritance changed after approval');
+        } catch (error) { conflicts.set(key, error instanceof PlytixError ? error.message : 'Current pricing evidence is unavailable'); }
+      }
+    }
+    const changes = plans.flatMap(p => p.changes);
+    const groupConflicts = this.groupConflicts(changes, snapshot);
+    for (const [key, reason] of groupConflicts) if (!targets || targets.has(key)) conflicts.set(key, reason);
+    // A conflicted member holds its entire material group, not unrelated groups.
+    const blockedGroups = new Set(changes.filter(c => conflicts.has(`${c.product_id}/${c.attribute}`)).map(c => c.material_group?.key).filter(Boolean));
+    for (const change of changes) if (change.material_group && blockedGroups.has(change.material_group.key)) conflicts.set(`${change.product_id}/${change.attribute}`, 'A member of this material group needs review');
+    return conflicts;
+  }
+
+  groupConflicts(changes: PricingChange[], snapshot: PricingSnapshot) {
+    const conflicts = new Map<string, string>();
+    for (const change of changes) {
+      const group = change.material_group;
+      if (!group) continue;
+      const peers = changes.filter(c => c.material_group?.key === group.key);
+      let reason: string | undefined;
+      if (peers.some(c => c.new_value !== change.new_value)) reason = 'Material group has conflicting proposed full-item costs';
+      const covered = new Set(peers.flatMap(c => [c.product_id, ...c.descendant_impact.map(d => d.product_id)]));
+      const slot = /^supplier_([1-4])_cost$/.exec(change.attribute)?.[1];
+      const mpns = new Set<string>();
+      for (const p of snapshot.products.values()) {
+        const observed = materialGroup(p, { target_attribute: change.attribute, associations: [], currency: change.currency, unit: change.unit });
+        if (observed?.key !== group.key) continue;
+        const attributeId = snapshot.families.get(p.product_family_id!)?.data.find(a => a.label === change.attribute)?.id;
+        const overridden = p.overwritten_attributes?.some(a => [change.attribute, attributeId].includes(a.replace(/^attributes\./, '')));
+        const mpn = slot ? valueOf(p, `supplier_${slot}_mpn`) : undefined;
+        if (!overridden && typeof mpn === 'string' && mpn.trim()) mpns.add(mpn.trim());
+        if (!covered.has(p.id) && !overridden && valueOf(p, change.attribute) !== change.new_value) reason = 'Material group contains additional unapproved products; include their inheritance owners in the review';
+      }
+      if (group.identifier_attribute === 'material_id' && mpns.size > 1) reason = 'Material group has conflicting supplier MPNs';
+      if (reason) for (const peer of peers) conflicts.set(`${peer.product_id}/${peer.attribute}`, reason);
+    }
+    return conflicts;
   }
   private async checkReviewBinding(plan: StoredPlan, directory: PricingStore) {
     if (!plan.review_binding) return;

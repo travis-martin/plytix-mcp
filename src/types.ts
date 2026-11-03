@@ -277,6 +277,8 @@ export interface PlytixClientConfig {
 // ─────────────────────────────────────────────────────────────
 
 export class PlytixError extends Error {
+  /** Sanitized Retry-After delay, retained without upstream response bodies. */
+  retryAfterMs?: number;
   constructor(
     message: string,
     public status?: number,

@@ -63,6 +63,33 @@ describe('Plytix API security boundaries', () => {
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
+  it('sends only the fixed bulk update action, polls the returned job and retains Retry-After', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(auth())
+      .mockResolvedValueOnce(Response.json({ data: [{ id: 'job-1' }] }))
+      .mockResolvedValueOnce(Response.json({ data: [{ status: 'Finished', summary: { ok: '1' } }] }))
+      .mockResolvedValueOnce(new Response('private upstream response', { status: 429, headers: { 'Retry-After': '60' } }));
+    const client = new PlytixClient({ ...credentials, allowWrites: true, writeTools: new Set(['pricing_review_apply']) });
+    const products = [{ id: 'p1', data: { attributes: { supplier_1_cost: 12.5 } } }];
+    await client.runOperation(async () => {
+      expect(await client.submitPricingBulk(products)).toBe('job-1');
+      expect(await client.getPricingBulkJob('job-1')).toMatchObject({ status: 'Finished' });
+      const error = await client.submitPricingBulk(products).catch(e => e);
+      expect(error.retryAfterMs).toBe(60_000); expect(error.status).toBe(429);
+      expect(JSON.stringify(error)).not.toContain('private upstream');
+    }, undefined, 'pricing_review_apply');
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1]?.body))).toEqual({ action: 'update', products });
+    expect(fetchMock.mock.calls[1][0]).toBe('https://pim.plytix.com/api/v1/bulk/products');
+    expect(fetchMock.mock.calls[2][0]).toBe('https://pim.plytix.com/api/v1/bulk/products/job-1');
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it('rejects a bulk mutation from the refresh operation before authentication', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch');
+    const client = new PlytixClient({ ...credentials, allowWrites: true, writeTools: new Set(['pricing_review_apply']) });
+    await expect(client.runOperation(() => client.submitPricingBulk([{ id: 'p1', data: { attributes: { cost: 2 } } }]), undefined, 'pricing_review_refresh')).rejects.toThrow('not authorized');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it('times out the response body and suppresses transport error details', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValueOnce(auth()).mockImplementationOnce(async (_url, init) => {
       return new Response(new ReadableStream({ start(controller) {

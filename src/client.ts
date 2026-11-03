@@ -86,7 +86,7 @@ export class PlytixClient {
   runOperation<T>(work: () => Promise<T>, signal?: AbortSignal, toolName?: string): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
     if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
-    const batchReview = toolName === 'pricing_plan' || toolName === 'pricing_review_plan' || toolName === 'pricing_review_apply';
+    const batchReview = ['pricing_plan', 'pricing_review_plan', 'pricing_review_apply', 'pricing_review_refresh'].includes(toolName ?? '');
     this.operationDurationMs = batchReview ? 80_000 : 45_000;
     this.operationRequestLimit = batchReview ? 4096 : 512;
     this.operationResponseLimit = (batchReview ? 64 : 8) * 1024 * 1024;
@@ -314,8 +314,14 @@ export class PlytixClient {
       }
       if (response.status === 204) return { data: [] } as PlytixResult<T>;
       if (!response.ok) {
+        const retryAfter = response.headers.get('retry-after');
+        const error = new PlytixError(`Plytix request failed (HTTP ${response.status})`, response.status);
+        if (response.status === 429 && retryAfter !== null) {
+          const delay = /^\d+(\.\d+)?$/.test(retryAfter) ? Number(retryAfter) * 1000 : Date.parse(retryAfter) - Date.now();
+          if (Number.isFinite(delay)) error.retryAfterMs = Math.max(0, delay);
+        }
         await response.body?.cancel();
-        throw new PlytixError(`Plytix request failed (HTTP ${response.status})`, response.status);
+        throw error;
       }
       const result = await this.readJson(response, !readOnly) as PlytixResult<T>;
       if (readOnly && (!result || !Array.isArray(result.data))) {
@@ -347,6 +353,24 @@ export class PlytixClient {
 
   async getProduct(id: string): Promise<PlytixResult<PlytixProduct>> {
     return this.request<PlytixProduct>(`/api/v2/products/${encodeURIComponent(id)}`);
+  }
+
+  async submitPricingBulk(products: Array<{ id: string; data: { attributes: Record<string, number> } }>): Promise<string> {
+    if (!products.length || products.length > 1000 || new Set(products.map(p => p.id)).size !== products.length ||
+        products.some(p => !p.id || !Object.keys(p.data.attributes).length || Object.values(p.data.attributes).some(v => !Number.isFinite(v)))) throw new PlytixError('Invalid pricing bulk payload');
+    const result = await this.request<{ id?: string }>('/api/v1/bulk/products', { method: 'POST', body: JSON.stringify({ action: 'update', products }) }, 0);
+    const id = result.data?.[0]?.id;
+    if (typeof id !== 'string' || !/^[a-zA-Z0-9_-]{1,200}$/.test(id)) throw new PlytixError('Bulk submission returned no usable job ID; inspect actual state before retrying');
+    return id;
+  }
+
+  async getPricingBulkJob(jobId: string): Promise<Record<string, unknown>> {
+    if (!/^[a-zA-Z0-9_-]{1,200}$/.test(jobId)) throw new PlytixError('Invalid bulk job ID');
+    // Job states change independently of product writes; never reuse a cached poll.
+    this.clearOperationReadCache();
+    const result = await this.request<Record<string, unknown>>(`/api/v1/bulk/products/${encodeURIComponent(jobId)}`);
+    if (!result.data?.[0]) throw new PlytixError('Bulk job response is unavailable');
+    return result.data[0];
   }
 
   async getProductAssets(productId: string): Promise<PlytixResult<PlytixAsset>> {

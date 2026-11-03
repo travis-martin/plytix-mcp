@@ -8,7 +8,7 @@ import { PricingReviewService } from '../pricing/review.js';
 import { ruleSchema } from '../pricing/model.js';
 import { createPricingStore, type PricingStore } from '../pricing/store.js';
 import { decorateResult } from '../results.js';
-import type { PlytixProduct } from '../types.js';
+import { PlytixError, type PlytixProduct } from '../types.js';
 
 const directories: string[] = [];
 afterEach(async () => {
@@ -39,7 +39,12 @@ async function fixture(separatePlans = false, containerCount = 0) {
   const root: PlytixProduct = { id: 'root', sku: 'ROOT', product_type: 'PARENT', product_family_id: 'f', num_variations: containerCount };
   const records = [...products, root, ...[...children.values()].flat()];
   vi.spyOn(client, 'verifyKnowledgeAccess').mockResolvedValue();
-  vi.spyOn(client, 'searchProducts').mockResolvedValue({ data: structuredClone(products) });
+  vi.spyOn(client, 'searchProducts').mockImplementation(async body => {
+    const all = body.filters?.some(g => g.some(f => f.field === 'product_family_id')) ? records : products;
+    const page = body.pagination?.page ?? 1, pageSize = body.pagination?.page_size ?? 100;
+    return { data: structuredClone(all.slice((page - 1) * pageSize, page * pageSize)), pagination: { page, page_size: pageSize, total: all.length, pages: Math.max(1, Math.ceil(all.length / pageSize)) } };
+  });
+  vi.spyOn(client, 'submitPricingBulk').mockRejectedValue(new PlytixError('Bulk unavailable', 405));
   vi.spyOn(client, 'getProduct').mockImplementation(async id => ({ data: structuredClone(records.filter(product => product.id === id)) }));
   if (containerCount) vi.spyOn(client, 'getProductVariants').mockImplementation(async id => ({ data: structuredClone(children.get(id) ?? []), pagination: { page: 1, pages: 1, count: 10, total: 10 } }));
   vi.spyOn(client, 'getFamily').mockResolvedValue({ data: [{ id: 'f', name: 'Family' }] });
@@ -108,7 +113,7 @@ describe('durable pricing review', () => {
       expect(prepared.approval!.arguments.changes.every(change => change.descendants.length === 10)).toBe(true);
       expect(prepared.approval!.argument_characters).toBeLessThan(64_000);
       expect(prepared.batching.estimated_api_requests).toBeLessThanOrEqual(prepared.batching.max_estimated_api_requests);
-      expect(prepared.batching.estimated_api_requests).toBe(2 + 26 * (15 + 4 * 10 + 3));
+      expect(prepared.batching.estimated_api_requests).toBe(2 + 26 * 5);
       if (!batches) expect(f.write).not.toHaveBeenCalled();
       const applied = await f.reviewService.apply(prepared.approval!.arguments);
       expect(applied.state).toBe('complete');
@@ -120,9 +125,9 @@ describe('durable pricing review', () => {
     expect(f.write.mock.calls.map(([id]) => id)).toEqual(f.products.map(product => product.id));
     expect(f.products.every(product => product.attributes!.cost === 11.25)).toBe(true);
     for (const children of f.children.values()) expect(children.map(child => child.attributes!.cost)).toEqual([...Array<number>(9).fill(11.25), 12]);
-    expect(peakReads).toBe(10);
+    expect(peakReads).toBe(0);
     expect(activeReads).toBe(0);
-    expect(completedReads).toBe(26 * 10 * 5);
+    expect(completedReads).toBe(0);
     expect(peakWrites).toBe(1);
   }, 15_000);
 
@@ -258,10 +263,10 @@ describe('durable pricing review', () => {
     const selected = await f.reviewService.update({ review_id: f.review.review_id, expected_revision: f.review.revision, decisions: f.review.lines.map(line => ({ line_id: line.line_id, status: 'selected' })) });
     const prepared = await f.reviewService.plan({ review_id: selected.review_id, expected_revision: selected.revision });
     f.products[2].attributes!.cost = 31;
-    await expect(f.reviewService.apply(prepared.approval!.arguments)).rejects.toThrow(/changed|after review/i);
-    expect(f.write).not.toHaveBeenCalled();
-    expect((await f.reviewService.get(selected.review_id)).batches).toEqual([]);
-    for (const plan of prepared.plans) expect((await f.service.planGet(plan.plan_id)).state).toBe('draft');
+    const result = await f.reviewService.apply(prepared.approval!.arguments);
+    expect(result.state).toBe('stopped');
+    expect(result.review.lines.map(l => l.execution?.status)).toEqual(['verified', 'verified', 'conflict']);
+    expect(f.write.mock.calls.map(c => c[0])).toEqual(['p1', 'p2']);
   });
 
   it('rejects tampered amounts, child impacts, or plan digests in the exact approval manifest', async () => {
@@ -288,7 +293,7 @@ describe('durable pricing review', () => {
     expect(applied.review.counts).toMatchObject({ verified: 1, pending: 2, awaiting_approval: 0 });
     await expect(f.reviewService.update({ review_id: applied.review.review_id, expected_revision: applied.review.revision, decisions: [{ line_id: line.line_id, status: 'pending' }] })).rejects.toThrow(/executed|uncertain/i);
     await expect(f.reviewService.plan({ review_id: applied.review.review_id, expected_revision: applied.review.revision, line_ids: [line.line_id] })).rejects.toThrow(/executed|uncertain/i);
-    await expect(f.reviewService.apply(prepared.approval!.arguments)).rejects.toThrow(/consumed/i);
+    await f.reviewService.apply(prepared.approval!.arguments); // Idempotent status/resume: no repeated write.
     expect(f.write).toHaveBeenCalledTimes(1);
   });
 
@@ -300,14 +305,14 @@ describe('durable pricing review', () => {
     const applied = await f.reviewService.apply(prepared.approval!.arguments);
     expect(applied.state).toBe('stopped');
     expect(applied.review.lines[0].execution?.status).toBe('sending_or_unknown');
-    expect(applied.review.lines.slice(1).every(line => !line.execution)).toBe(true);
+    expect(applied.review.lines.slice(1).every(line => line.execution?.status === 'skipped')).toBe(true);
     expect(applied.review.counts).toMatchObject({ sending_or_unknown: 1, awaiting_approval: 2 });
     expect(JSON.stringify(applied)).not.toContain('private server body');
     const reopened = await new PricingReviewService(f.client, f.directory).get(applied.review.review_id);
     expect(reopened.lines[0].execution?.status).toBe('sending_or_unknown');
     await expect(f.reviewService.plan({ review_id: reopened.review_id, expected_revision: reopened.revision, line_ids: [reopened.lines[0].line_id] })).rejects.toThrow(/executed|uncertain/i);
     await expect(f.reviewService.update({ review_id: reopened.review_id, expected_revision: reopened.revision, decisions: [{ line_id: reopened.lines[0].line_id, status: 'pending' }] })).rejects.toThrow(/executed|uncertain/i);
-    await expect(f.reviewService.apply(prepared.approval!.arguments)).rejects.toThrow(/consumed/i);
+    await f.reviewService.apply(prepared.approval!.arguments); // Idempotent status/resume: no repeated write.
     expect(f.write).toHaveBeenCalledTimes(1);
   });
 

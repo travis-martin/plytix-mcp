@@ -46,7 +46,18 @@ export const mappingSchema = z.object({
   row_index: z.number().int().min(0).max(PRICING_LIMITS.import_rows - 1), product_id: text, family_id: text,
   proposed_value: decimal.optional(), review_note: z.string().trim().min(1).max(2000).optional(),
 }).strict();
-export const planInput = z.object({ import_id: z.string().uuid(), rule_ids: z.array(label).min(1).max(10), mappings: z.array(mappingSchema).min(1).max(PRICING_LIMITS.plan_changes) }).strict();
+export const planInput = z.object({
+  import_id: z.string().uuid(), rule_ids: z.array(label).max(10).default([]),
+  // Private, one-run calculation definitions. Approval covers the resulting exact
+  // changes; these definitions are never promoted to the shared rule store.
+  batch_rules: z.array(ruleSchema).max(10).optional(),
+  mappings: z.array(mappingSchema).min(1).max(PRICING_LIMITS.plan_changes),
+}).strict();
+export const materialGroupSchema = z.object({
+  key: z.string(), scope: z.literal('family'), supplier: z.string(),
+  identifier: z.string(), identifier_attribute: z.string(),
+  identity: z.record(z.string(), z.unknown()),
+}).strict();
 export const changeSchema = z.object({
   row_index: z.number().int(), product_id: text, sku: z.string(), family_id: text,
   attribute: label, old_value: z.number().finite(), new_value: z.number().finite(),
@@ -54,6 +65,7 @@ export const changeSchema = z.object({
   inheritance_level: z.string(), evidence_digest: z.string(),
   calculated_value: z.number().finite().optional(), review_note: z.string().optional(),
   review_evidence: z.record(z.string(), z.unknown()),
+  material_group: materialGroupSchema.optional(),
   descendant_impact: z.array(z.object({ product_id: text, sku: z.string(), old_value: z.number().finite(), new_value: z.number().finite(), overridden: z.boolean(), evidence_digest: z.string(), review_evidence: z.record(z.string(), z.unknown()) }).strict()).max(10),
 }).strict();
 export type PricingChange = z.infer<typeof changeSchema>;

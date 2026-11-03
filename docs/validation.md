@@ -1,5 +1,35 @@
 # Validation
 
+## Version 0.10.0 — November 3, 2026 (prepared; not deployed)
+
+- Typecheck, build and all 418 fixture tests across 35 files pass. Coverage includes
+  exact approval manifests, API-layer write restrictions, private one-run rules,
+  combined-attribute PATCH payloads, material/MPN grouping, inherited overrides,
+  partial bulk failures, delayed counters/error details, real HTTP 429 handling,
+  ambiguous writes, queued continuations and final preserved-field validation.
+- The 38-owner fixture covers 295 records including four excluded owners. It uses
+  one bulk submission, three preflight product searches and three final searches,
+  with zero per-owner detail GETs or child writes. This is a request-count fixture,
+  not a live throughput measurement. Schema, authentication, storage and job polls
+  are additional operations.
+- The Chrome fixture passes 67 checks at 1440×1100 and 390×844. Individual/batch
+  selection, modification, instructions and rejection remain available. Transport
+  choice is included in exact approval, all seven execution filters retain totals,
+  pending batches lock edits, and continuations request approval without calling a
+  product-write tool. Batch-wide exceptions are visible alongside line statuses.
+  Screenshots were inspected; the only console error was the fixture's missing favicon.
+- Portable archive validation and isolated startup pass: version 0.10.0, 10 files,
+  four skills, 52 default read/draft tools and the workspace resource. Network is
+  disabled and credentials are fixtures. There are still 24 separately enabled
+  writes, for 76 standard tools with all those writes enabled.
+- No deployment, live product mutation, new credential, grant or allowlist change
+  was performed for this release. Bulk acceptance and container/override behavior
+  on the target account require a future approved update. Existing completed
+  product updates must not be replayed as a test. See [batch behavior and recovery](pricing-batches.md).
+- Active batch records require a compatible 0.10.0 writer. Disable pricing writes
+  before rollback; retain the job IDs, reservations and audit rather than restoring
+  earlier drafts.
+
 ## Version 0.9.0 — November 3, 2026
 
 - Local typecheck/build and all 396 fixture tests across 34 files passed,

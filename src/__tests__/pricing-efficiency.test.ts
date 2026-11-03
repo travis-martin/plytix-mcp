@@ -5,7 +5,7 @@ import { PricingService } from '../pricing/service.js';
 import { PricingReviewService } from '../pricing/review.js';
 import { ruleSchema } from '../pricing/model.js';
 import type { PricingStore } from '../pricing/store.js';
-import type { PlytixProduct } from '../types.js';
+import { PlytixError, type PlytixProduct } from '../types.js';
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -26,9 +26,10 @@ async function fixture(count = 100, longNotes = false, groupSize = 100) {
   const client = new PlytixClient({ apiKey: 'fixture', apiPassword: 'fixture', allowWrites: true, writeTools: new Set(['pricing_apply']) });
   const products: PlytixProduct[] = Array.from({ length: count }, (_, i) => ({ id: `p${i}`, sku: `SKU-${i}`, product_type: 'STANDALONE', product_family_id: 'f', num_variations: 0, attributes: { cost: 10, brand: 'Acme' } }));
   vi.spyOn(client, 'verifyKnowledgeAccess').mockResolvedValue();
+  vi.spyOn(client, 'submitPricingBulk').mockRejectedValue(new PlytixError('Bulk unavailable', 405));
   vi.spyOn(client, 'searchProducts').mockImplementation(async body => {
     const skus = new Set(body.filters!.map(group => String(group[0].value).toLowerCase()));
-    const all = products.filter(product => skus.has(product.sku!.toLowerCase()));
+    const all = body.filters!.some(group => group[0].field === 'product_family_id') ? products : products.filter(product => skus.has(product.sku!.toLowerCase()));
     const page = body.pagination!.page!, pageSize = body.pagination!.page_size!;
     return { data: structuredClone(all.slice((page - 1) * pageSize, page * pageSize)), pagination: { page, page_size: pageSize, total: all.length, pages: Math.max(1, Math.ceil(all.length / pageSize)) } };
   });
@@ -125,7 +126,7 @@ describe('pricing efficiency and bounded batching', () => {
     expect(result.plans).toHaveLength(1);
     expect(result.approval!.arguments.plans).toHaveLength(1);
     expect(result.approval!.arguments.changes).toHaveLength(100);
-    expect(result.batching).toMatchObject({ requested: 100, prepared: 100, deferred_count: 0, estimated_api_requests: 1502, max_estimated_api_requests: 2048 });
+    expect(result.batching).toMatchObject({ requested: 100, prepared: 100, deferred_count: 0, estimated_api_requests: 502, max_estimated_api_requests: 2048 });
     expect(f.store.reads.filter(key => key === `${f.imported.import_id}.json`)).toHaveLength(1);
     expect(f.store.reads.filter(key => key === `${f.plan.plan_id}.json`)).toHaveLength(1);
     expect(f.store.reads.filter(key => key === 'rules.json')).toHaveLength(1);
@@ -153,10 +154,9 @@ describe('pricing efficiency and bounded batching', () => {
     const f = await fixture(3, false, 1);
     const prepared = await f.reviews.plan({ review_id: f.selected.review_id, expected_revision: f.selected.revision });
     expect(prepared.plans).toHaveLength(3);
-    // Each standalone group can require 3 preflight reads + 3 apply rebuild
-    // reads + 3 final guard reads + PATCH + readback; reserve empty-container
-    // listing cost too because parent_level does not distinguish standalone.
-    expect(prepared.batching.estimated_api_requests).toBe(3 * (3 + 3 + 3 + 1 + 1 + 4) + 2);
+    // The estimate reserves a conservative shared-read/metadata allowance and
+    // one fallback PATCH per owner, without per-row readback loops.
+    expect(prepared.batching.estimated_api_requests).toBe(3 * 5 + 2);
     expect(prepared.learning).toHaveLength(3);
     expect((await f.reviews.apply(prepared.approval!.arguments)).state).toBe('complete');
   });
@@ -185,30 +185,29 @@ describe('pricing efficiency and bounded batching', () => {
     expect((await f.reviews.apply(prepared.approval!.arguments)).state).toBe('complete');
   });
 
-  it('defers untouched rows before the write and safely reprepares them with fresh approval', async () => {
+  it('keeps untouched rows queued and resumes the same exact approved manifest', async () => {
     const f = await fixture(3);
     const prepared = await f.reviews.plan({ review_id: f.selected.review_id, expected_revision: f.selected.revision });
-    const remaining = vi.spyOn(f.client, 'remainingOperationTimeMs').mockReturnValue(9000);
+    const remaining = vi.spyOn(f.client, 'remainingOperationTimeMs').mockReturnValue(2000);
     const deferred = await f.reviews.apply(prepared.approval!.arguments);
-    expect(deferred.state).toBe('deferred');
-    expect(deferred.deferred_count).toBe(3);
-    expect(deferred.review.lines.every(line => line.execution?.status === 'skipped')).toBe(true);
+    expect(deferred.state).toBe('pending');
+    expect(deferred.review.counts.queued).toBe(3);
+    expect(deferred.review.lines.every(line => line.execution?.status === 'queued')).toBe(true);
     expect(f.write).not.toHaveBeenCalled();
     remaining.mockReturnValue(60_000);
-    const next = await f.reviews.plan({ review_id: deferred.review.review_id, expected_revision: deferred.review.revision });
-    expect((await f.reviews.apply(next.approval!.arguments)).state).toBe('complete');
+    expect((await f.reviews.apply(prepared.approval!.arguments)).state).toBe('complete');
     expect(f.write).toHaveBeenCalledTimes(3);
   });
 
   it('keeps verified rows locked when the next row runs out of time before sending', async () => {
     const f = await fixture(3);
     const prepared = await f.reviews.plan({ review_id: f.selected.review_id, expected_revision: f.selected.revision });
-    vi.spyOn(f.client, 'remainingOperationTimeMs').mockImplementation(() => f.write.mock.calls.length ? 9000 : 60_000);
+    vi.spyOn(f.client, 'remainingOperationTimeMs').mockImplementation(() => f.write.mock.calls.length ? 2000 : 60_000);
     const result = await f.reviews.apply(prepared.approval!.arguments);
-    expect(result.state).toBe('deferred');
-    expect(result.review.lines.map(line => line.execution?.status)).toEqual(['verified', 'skipped', 'skipped']);
-    expect(result.deferred_count).toBe(2);
+    expect(result.state).toBe('pending');
+    expect(result.review.lines.map(line => line.execution?.status)).toEqual(['verified', 'queued', 'queued']);
+    expect(result.review.counts.queued).toBe(2);
     expect(f.write).toHaveBeenCalledTimes(1);
-    await expect(f.reviews.update({ review_id: result.review.review_id, expected_revision: result.review.revision, decisions: [{ line_id: result.review.lines[0].line_id, status: 'selected' }] })).rejects.toThrow(/executed|uncertain/i);
+    await expect(f.reviews.update({ review_id: result.review.review_id, expected_revision: result.review.revision, decisions: [{ line_id: result.review.lines[0].line_id, status: 'selected' }] })).rejects.toThrow(/executed|uncertain|progress/i);
   });
 });

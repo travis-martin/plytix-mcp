@@ -11,7 +11,7 @@ export const WRITE_TOOLS = new Set([
 export const READ_TOOLS = new Set([
   'catalog_workspace',
   'approval_capabilities', 'approval_check',
-  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_dictionary_get', 'pricing_guidance_get',
+  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_review_refresh', 'pricing_dictionary_get', 'pricing_guidance_get',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',
@@ -98,6 +98,7 @@ const WRITE_ROUTES: Record<string, { method: string; path: RegExp }> = {
 };
 
 export function isWriteRequestForTool(toolName: string, endpoint: string, method: string): boolean {
+  if (toolName === 'pricing_review_apply' && method === 'POST' && endpoint === '/api/v1/bulk/products') return true;
   const route = Object.prototype.hasOwnProperty.call(WRITE_ROUTES, toolName) ? WRITE_ROUTES[toolName] : undefined;
   return route !== undefined && route.method === method && route.path.test(endpoint);
 }
