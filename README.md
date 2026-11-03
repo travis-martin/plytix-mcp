@@ -10,6 +10,11 @@ matches. Review the mappings and calculation rules, then inspect a saved plan of
 old/new numeric values, restrictions and inheritance effects. Only an explicitly
 allowlisted, individually approved call can apply it. Each update is rechecked
 and read back; uncertain execution stops and remains recorded for review.
+The workspace keeps per-line status across individual or batch selection,
+rejection, proposed amounts and instructions. Editing invalidates prepared
+approval snapshots. Container variants can own inheritable prices; explicit
+child overrides are preserved and verified. `approval_check` tests the host's
+form input without approving or performing a data change.
 
 Brand/supplier aliases, conditions, effective dates, calculation steps and important
 review attributes live in versioned JSON rules outside reusable code. Source

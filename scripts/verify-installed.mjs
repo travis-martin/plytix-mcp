@@ -32,7 +32,7 @@ if (live) {
 }
 const client = new Client({ name: 'plytix-installed-verification', version: '1' });
 const transport = new StdioClientTransport({ command: process.execPath, args: [entry], cwd: repository, env: environment, stderr: 'ignore' });
-const localDrafts = new Set(['pricing_import', 'pricing_plan']);
+const localDrafts = new Set(['pricing_import', 'pricing_plan', 'pricing_review_create', 'pricing_review_update', 'pricing_review_plan']);
 let failures = 0;
 async function check(name, arguments_ = {}) {
   try {
@@ -47,7 +47,7 @@ try {
   if (live) await access(envFile);
   await client.connect(transport);
   const tools = (await client.listTools()).tools;
-  const required = ['discovery_guide', 'identifier_detect', 'pricing_import', 'pricing_plan', 'pricing_plan_get', 'pricing_rules_get'];
+  const required = ['discovery_guide', 'identifier_detect', 'pricing_import', 'pricing_plan', 'pricing_plan_get', 'pricing_rules_get', 'pricing_review_create', 'pricing_review_get', 'approval_capabilities', 'approval_check'];
   const names = new Set(tools.map(tool => tool.name));
   if (required.some(name => !names.has(name)) || tools.some(tool => !localDrafts.has(tool.name) && tool.annotations?.readOnlyHint !== true)) throw new Error('Installed catalog mismatch');
   if (tools.filter(tool => localDrafts.has(tool.name)).some(tool => tool.annotations?.destructiveHint !== false || tool.annotations?.readOnlyHint !== false)) throw new Error('Draft annotations mismatch');

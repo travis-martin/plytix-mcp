@@ -17,6 +17,9 @@ it('opens a read-only workspace through the shared server with a self-contained 
     const result: any = await client.callTool({ name: 'catalog_workspace', arguments: {} });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent.data.tabs).toEqual(['products', 'dictionary', 'pricing']);
+    const direct: any = await client.callTool({ name: 'catalog_workspace', arguments: { review_id: '33333333-3333-4333-8333-333333333333' } });
+    expect(direct.isError).not.toBe(true);
+    expect(direct.structuredContent.data.review_id).toBe('33333333-3333-4333-8333-333333333333');
     const resource = await client.readResource({ uri: WORKSPACE_URI });
     const html = resource.contents[0] as { text: string; mimeType: string; _meta?: any };
     expect(html.mimeType).toBe('text/html;profile=mcp-app');

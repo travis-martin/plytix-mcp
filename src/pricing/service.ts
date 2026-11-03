@@ -1,10 +1,11 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import type { PlytixClient } from '../client.js';
-import { PlytixError, type PlytixProduct } from '../types.js';
+import { PlytixError, type PlytixProduct, type PlytixResult } from '../types.js';
 import { createPricingStore, type PricingStore } from './store.js';
 import { applyInput, changeSchema, importInput, planInput, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
 import { calculate, parseCsv, withinChangeLimit } from './calculate.js';
+import { reviewBinding, reviewDocument } from './review-model.js';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -14,16 +15,17 @@ function canonical(value: unknown): string {
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 function fail(message: string): never { throw new PlytixError(message); }
 const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), rows: z.array(sourceRow).max(20), created_at: z.string() });
-const storedPlan = z.object({
+export const storedPlan = z.object({
   plan_id: z.string().uuid(), digest: z.string(), created_at: z.string(), expires_at: z.string(),
   import_id: z.string().uuid(), rules_revision: z.number(), input: planInput,
   rules_digest: z.string(), source_digest: z.string(), rule_snapshot: z.array(ruleSchema),
   source_snapshot: docSchema,
-  changes: z.array(changeSchema).max(20), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), reason: z.string() })),
+  review_binding: reviewBinding.optional(),
+  changes: z.array(changeSchema).max(20), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), product_id: z.string().optional(), family_id: z.string().optional(), reason: z.string() })),
   state: z.enum(['draft', 'executing', 'complete', 'stopped']),
   results: z.array(z.object({ product_id: z.string(), attribute: z.string(), status: z.string() })),
 });
-type StoredPlan = z.infer<typeof storedPlan>;
+export type StoredPlan = z.infer<typeof storedPlan>;
 
 function valueOf(product: PlytixProduct, label: string): unknown {
   return Object.prototype.hasOwnProperty.call(product, `attributes.${label}`) ? product[`attributes.${label}`] : product.attributes?.[label];
@@ -32,6 +34,27 @@ function canonicalName(value: string, aliases: PricingRule['associations'][numbe
   const matches = aliases.filter(alias => alias.from.trim().toLowerCase() === value.trim().toLowerCase());
   if (matches.length > 1) fail('Association alias is ambiguous');
   return (matches[0]?.to ?? value).trim().toLowerCase();
+}
+
+function hasOverrideEvidence(product: PlytixProduct): boolean {
+  return Array.isArray(product.overwritten_attributes) && product.overwritten_attributes.every(item => typeof item === 'string' && item.length > 0);
+}
+
+function descendantEvidenceDigest(product: PlytixProduct, evidence: Record<string, unknown>): string {
+  return digest({ id: product.id, sku: product.sku, product_type: product.product_type, descendants: product.num_variations,
+    parent: product._parent_id, family: product.product_family_id, overrides: product.overwritten_attributes, evidence });
+}
+
+function completeDescendantIds(product: PlytixProduct, listing: PlytixResult<PlytixProduct>): string[] {
+  const ids = listing.data.map(child => child.id);
+  const pagination = listing.pagination;
+  if (ids.some(id => typeof id !== 'string' || !id || id === product.id) || new Set(ids).size !== ids.length || ids.length !== product.num_variations ||
+      (pagination?.pages !== undefined && pagination.pages > 1) ||
+      (pagination?.page !== undefined && pagination.page !== 1) ||
+      (pagination?.count !== undefined && pagination.count !== ids.length) ||
+      (pagination?.total !== undefined && pagination.total !== ids.length) ||
+      (pagination?.total_count !== undefined && pagination.total_count !== ids.length)) fail('Complete bounded descendant listing is unavailable');
+  return ids;
 }
 
 export class PricingService {
@@ -109,7 +132,7 @@ export class PricingService {
     if (product.product_type !== 'VARIANT' && product._parent_id) fail('Product ancestry is inconsistent');
     if (product.product_type === 'VARIANT' && !product._parent_id) fail('Variant parent is unavailable');
     if (!Number.isInteger(product.num_variations) || product.num_variations! < 0 || product.num_variations! > 10) fail('A bounded explicit descendant count from zero to ten is required');
-    if (product.product_type !== 'PARENT' && product.num_variations !== 0) fail('Non-parent products must report a zero descendant count');
+    if (!['PARENT', 'VARIANT'].includes(product.product_type!) && product.num_variations !== 0) fail('Non-container products must report a zero descendant count');
     const family = await this.client.getFamilyAllAttributes(mapping.family_id);
     const candidates = family.data.filter(attribute => attribute.id && attribute.label === rule.target_attribute);
     if (candidates.length !== 1) fail('Attribute inheritance configuration is missing or ambiguous');
@@ -118,6 +141,15 @@ export class PricingService {
     if (level === 'no_level' || !['parent_level', 'variant_level'].includes(level ?? '')) fail('Attribute inheritance level is off or unavailable');
     if (product.product_type === 'VARIANT' && level !== 'variant_level') fail('Parent-level variant attributes require explicit inheritance-impact review; no override is created');
     if (product.product_type !== 'VARIANT' && level !== 'parent_level') fail('Root product attribute is not configured at parent level');
+    // A Level 2 owner is a direct variant of a root parent, not an arbitrary
+    // record with a matching value or a particular SKU prefix.
+    let ownerAncestry: Record<string, unknown> | undefined;
+    if (product.product_type === 'VARIANT') {
+      const parent = (await this.client.getProduct(product._parent_id!)).data[0];
+      if (!parent || parent.id !== product._parent_id || parent.id === product.id || parent.product_type !== 'PARENT' ||
+          parent._parent_id || parent.product_family_id !== product.product_family_id) fail('Variant inheritance owner requires a verified root parent in the same family');
+      ownerAncestry = { id: parent.id, product_type: parent.product_type, parent: parent._parent_id, family: parent.product_family_id };
+    }
     // Fetch schema by observed ID, bypassing the client's cross-call label cache.
     const schema = await this.client.getAttributeById(attribute.id!);
     if (!schema || schema.label !== rule.target_attribute || !['NumberAttribute', 'DecimalAttribute', 'IntegerAttribute'].includes(schema.type_class)) fail('Target must be a current supported numeric attribute');
@@ -142,24 +174,30 @@ export class PricingService {
     const oldValue = valueOf(product, rule.target_attribute);
     if (typeof oldValue !== 'number' || !Number.isFinite(oldValue) || oldValue < 0) fail('Existing numeric value is missing or invalid; initial value creation needs separate review');
     if (rule.expected_existing_column && (!/^-?\d{1,12}(?:\.\d{1,6})?$/.test(row.values[rule.expected_existing_column] ?? '') || Number(row.values[rule.expected_existing_column]) !== oldValue)) fail('Existing value does not match the document verification column');
-    const newValue = calculate(rule, row);
+    const calculatedValue = calculate(rule, row);
+    const manuallyModified = mapping.proposed_value !== undefined;
+    if (manuallyModified && !mapping.review_note?.trim()) fail('A manual proposed value requires a review note');
+    const newValue = manuallyModified
+      ? calculate({ ...rule, source_column: 'reviewed_proposed_value', operations: [] }, { source_ref: row.source_ref, values: { reviewed_proposed_value: mapping.proposed_value! } })
+      : calculatedValue;
+    if (manuallyModified && newValue !== Number(mapping.proposed_value)) fail('Manual proposed value exceeds the reviewed rounding precision');
     if (schema.type_class === 'IntegerAttribute' && !Number.isInteger(newValue)) fail('Calculated amount is not an integer');
     if (!withinChangeLimit(oldValue, newValue, rule.max_change_percent)) fail('Price change exceeds the reviewed change limit');
     const descendantImpact: PricingChange['descendant_impact'] = [];
-    if (product.product_type === 'PARENT') {
+    if (product.product_type === 'PARENT' || product.num_variations! > 0) {
+      const expectedChildType = product.product_type === 'VARIANT' ? 'SUB_VARIANT' : 'VARIANT';
       const listing = await this.client.getProductVariants(product.id);
-      const ids = listing.data.map(child => child.id);
-      const pagination = listing.pagination;
-      if (new Set(ids).size !== ids.length || ids.length !== product.num_variations ||
-          (pagination?.pages !== undefined && pagination.pages > 1) ||
-          (pagination?.page !== undefined && pagination.page !== 1) ||
-          (pagination?.total !== undefined && pagination.total !== ids.length) ||
-          (pagination?.total_count !== undefined && pagination.total_count !== ids.length)) fail('Complete bounded descendant listing is unavailable');
-      for (const id of ids) {
-        const child = (await this.client.getProduct(id)).data[0];
-        if (!child || child.id === product.id || child.product_type !== 'VARIANT' || child._parent_id !== product.id || child.num_variations !== 0 || child.product_family_id !== product.product_family_id || !Array.isArray(child.overwritten_attributes)) fail('Descendant identity, leaf status, family or override evidence is incomplete');
+      const ids = completeDescendantIds(product, listing);
+      // The validated owner bounds this group to ten independent reads. Preserve
+      // listing order while reducing the latency of inheritance verification.
+      const children = await Promise.allSettled(ids.map(id => this.client.getProduct(id)));
+      if (children.some(child => child.status === 'rejected')) fail('Descendant reads could not be completed');
+      for (const [index, id] of ids.entries()) {
+        const result = children[index];
+        const child = result.status === 'fulfilled' ? result.value.data[0] : undefined;
+        if (!child || child.id !== id || !child.sku || child.id === product.id || child.product_type !== expectedChildType || child._parent_id !== product.id || child.num_variations !== 0 || child.product_family_id !== product.product_family_id || !hasOverrideEvidence(child)) fail('Descendant identity, leaf status, family or override evidence is incomplete');
         const childValue = valueOf(child, rule.target_attribute);
-        const overridden = child.overwritten_attributes.some(item => item.replace(/^attributes\./, '') === rule.target_attribute);
+        const overridden = child.overwritten_attributes!.some(item => [rule.target_attribute, attribute.id].includes(item.replace(/^attributes\./, '')));
         if (typeof childValue !== 'number' || !Number.isFinite(childValue) || (!overridden && childValue !== oldValue)) fail('Descendant value does not agree with explicit inheritance evidence');
         // Parent changes may only propagate into the reviewed business scope.
         for (const association of rule.associations) {
@@ -176,11 +214,14 @@ export class PricingService {
           const included = (typeof observed === 'string' || typeof observed === 'number') && condition.values.includes(String(observed));
           if ((typeof observed !== 'string' && typeof observed !== 'number') || (condition.operator === 'not_equals' ? included : !included)) fail('Descendant restriction is not satisfied');
         }
-        descendantImpact.push({ product_id: child.id, sku: child.sku ?? '', old_value: childValue, new_value: overridden ? childValue : newValue, overridden, review_evidence: childEvidence, evidence_digest: digest({ parent: child._parent_id, family: child.product_family_id, overrides: child.overwritten_attributes, evidence: childEvidence }) });
+        descendantImpact.push({ product_id: child.id, sku: child.sku!, old_value: childValue, new_value: overridden ? childValue : newValue, overridden, review_evidence: childEvidence, evidence_digest: descendantEvidenceDigest(child, childEvidence) });
       }
       descendantImpact.sort((a, b) => a.product_id.localeCompare(b.product_id));
     }
-    return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue, currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence, evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
+    return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue,
+      ...(manuallyModified ? { calculated_value: calculatedValue } : {}), ...(mapping.review_note ? { review_note: mapping.review_note } : {}),
+      currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence,
+      evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, ownerAncestry, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
   }
   private async build(input: z.infer<typeof planInput>, directory: PricingStore) {
     const document = docSchema.parse(await directory.read(`${input.import_id}.json`));
@@ -197,15 +238,15 @@ export class PricingService {
         if (targets.has(target)) fail('Duplicate source rows or rules target the same product attribute');
         targets.add(target);
         changes.push(await this.inspect(row, document.sku_column, mapping, rule));
-      } catch (error) { blocked.push({ row_index: mapping.row_index, rule_id: rule.id, reason: error instanceof PlytixError ? error.message : 'Pricing evidence could not be verified' }); }
+      } catch (error) { blocked.push({ row_index: mapping.row_index, rule_id: rule.id, product_id: mapping.product_id, family_id: mapping.family_id, reason: error instanceof PlytixError ? error.message : 'Pricing evidence could not be verified' }); }
     }
     return { changes, blocked, rules_revision: rules.revision, rules_digest: digest(rules), source_digest: digest(document), rule_snapshot: selected, source_snapshot: document };
   }
-  async plan(input: z.infer<typeof planInput>) {
+  async plan(input: z.infer<typeof planInput>, binding?: z.infer<typeof reviewBinding>) {
     input = planInput.parse(input);
     const directory = await this.directory();
     const built = await this.build(input, directory);
-    const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: input.import_id, input, ...built, state: 'draft', results: [] };
+    const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: input.import_id, input, ...built, ...(binding ? { review_binding: reviewBinding.parse(binding) } : {}), state: 'draft', results: [] };
     await this.put(directory, plan.plan_id, plan);
     return plan;
   }
@@ -213,6 +254,33 @@ export class PricingService {
     z.string().uuid().parse(planId);
     const directory = await this.directory();
     return storedPlan.parse(await directory.read(`${planId}.json`));
+  }
+  private async checkReviewBinding(plan: StoredPlan, directory: PricingStore) {
+    if (!plan.review_binding) return;
+    const binding = plan.review_binding;
+    const review = reviewDocument.parse(await directory.read(`${binding.review_id}.json`));
+    if (review.revision !== binding.revision || binding.line_ids.some(id => !review.lines.some(line => line.line_id === id && line.status === 'selected' && line.prepared_plan_id === plan.plan_id))) fail('Review decisions changed; prepare a new selected-only plan');
+    const history = new Map<string, StoredPlan>();
+    for (const line of review.lines.filter(line => binding.line_ids.includes(line.line_id))) {
+      for (const id of line.plan_history) {
+        if (id === plan.plan_id) continue;
+        let previous = history.get(id);
+        if (!previous) { previous = storedPlan.parse(await directory.read(`${id}.json`)); history.set(id, previous); }
+        if (previous.state === 'draft') continue;
+        const attribute = previous.rule_snapshot.find(rule => rule.id === line.provenance.rule_id)?.target_attribute;
+        const result = previous.results.find(result => result.product_id === line.provenance.mapping.product_id && result.attribute === attribute);
+        if ((result && result.status !== 'skipped') || previous.state === 'executing' || (previous.state === 'complete' && !result)) fail('An executed or uncertain review line cannot be retried');
+      }
+    }
+  }
+  async preflight(planId: string) {
+    const directory = await this.directory();
+    const plan = storedPlan.parse(await directory.read(`${planId}.json`));
+    if (plan.state !== 'draft' || plan.blocked.length || Date.parse(plan.expires_at) <= Date.now()) fail('Pricing plan is blocked, expired or consumed');
+    await this.checkReviewBinding(plan, directory);
+    const fresh = await this.build(plan.input, directory);
+    if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');
+    return plan;
   }
   async apply(input: z.infer<typeof applyInput>) {
     input = applyInput.parse(input);
@@ -225,25 +293,42 @@ export class PricingService {
     });
     const persist = async () => directory.update(key, value => storedPlan.parse(value), () => plan);
     try {
+      await this.checkReviewBinding(plan, directory);
       const fresh = await this.build(plan.input, directory);
       if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');
       for (const change of plan.changes) {
         if (change.old_value === change.new_value) { plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'unchanged' }); continue; }
         // Final per-row guard narrows the external race window. Plytix has no CAS here.
         this.client.clearOperationReadCache();
+        await this.checkReviewBinding(plan, directory);
         if (digest(await this.readRules(directory)) !== plan.rules_digest) fail('Pricing rules changed before execution; remaining updates stopped');
         const rule = plan.rule_snapshot.find(item => item.id === change.rule_id)!;
         const mapping = plan.input.mappings.find(item => item.row_index === change.row_index && item.product_id === change.product_id)!;
         const current = await this.inspect(plan.source_snapshot.rows[change.row_index], plan.source_snapshot.sku_column, mapping, rule);
         if (canonical(current) !== canonical(change)) fail('Product or inheritance changed before execution; remaining updates stopped');
+        // Reuse the just-verified detail read inside this invocation to pin the
+        // owner's structural identity as well as its numeric readback.
+        const ownerBefore = (await this.client.getProduct(change.product_id)).data[0];
+        if (!ownerBefore || ownerBefore.id !== change.product_id) fail('Pricing owner evidence is unavailable before execution');
+        const ownerStructure = digest({ type: ownerBefore.product_type, parent: ownerBefore._parent_id, overrides: ownerBefore.overwritten_attributes });
         plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'sending_or_unknown' });
         await persist();
         await this.client.updateProduct(change.product_id, { attributes: { [change.attribute]: change.new_value } });
         const verified = (await this.client.getProduct(change.product_id)).data[0];
-        if (!verified || valueOf(verified, change.attribute) !== change.new_value) fail('Pricing readback failed; inspect actual state before any new plan');
-        for (const impact of change.descendant_impact) {
-          const child = (await this.client.getProduct(impact.product_id)).data[0];
-          if (!child || valueOf(child, change.attribute) !== impact.new_value) fail('Descendant propagation or override readback failed; inspect actual state before any new plan');
+        if (!verified || verified.id !== change.product_id || verified.sku !== change.sku || verified.product_family_id !== change.family_id ||
+            verified.num_variations !== change.descendant_impact.length || valueOf(verified, change.attribute) !== change.new_value ||
+            digest({ type: verified.product_type, parent: verified._parent_id, overrides: verified.overwritten_attributes }) !== ownerStructure) fail('Pricing readback failed; inspect actual state before any new plan');
+        if (change.descendant_impact.length) {
+          const ids = completeDescendantIds(verified, await this.client.getProductVariants(change.product_id)).sort();
+          if (canonical(ids) !== canonical(change.descendant_impact.map(impact => impact.product_id).sort())) fail('Descendant membership changed during execution; inspect actual state before any new plan');
+        }
+        const verifiedChildren = await Promise.allSettled(change.descendant_impact.map(impact => this.client.getProduct(impact.product_id)));
+        if (verifiedChildren.some(child => child.status === 'rejected')) fail('Descendant readback could not be completed; inspect actual state before any new plan');
+        for (const [index, impact] of change.descendant_impact.entries()) {
+          const result = verifiedChildren[index];
+          const child = result.status === 'fulfilled' ? result.value.data[0] : undefined;
+          if (!child || child.id !== impact.product_id || !hasOverrideEvidence(child) || valueOf(child, change.attribute) !== impact.new_value ||
+              descendantEvidenceDigest(child, impact.review_evidence) !== impact.evidence_digest) fail('Descendant propagation or override readback failed; inspect actual state before any new plan');
         }
         plan.results[plan.results.length - 1].status = 'verified';
         await persist();

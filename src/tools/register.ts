@@ -1,4 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ElicitResultSchema, type ElicitRequestFormParams, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ZodRawShape } from 'zod';
 import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS, LOCAL_DRAFT_TOOLS } from '../policy.js';
 import type { PlytixClient } from '../client.js';
@@ -44,10 +45,55 @@ export function configureToolPolicy(
   if (options.knowledge) knowledgeServices.set(server, options.knowledge);
 }
 
-/** The stdio host must show this form to the user; unattended hosts fail closed. */
+type FormRoute = 'openai/elicitation/create' | 'openai/form' | 'elicitation/create';
+export const writeApprovalArgumentLimit = (toolName: string): number => toolName === 'pricing_review_apply' ? 64_000 : 16_000;
+/** Preserve every validated field; compact only the bounded batch manifest. */
+export const serializeWriteApprovalArguments = (toolName: string, args: Record<string, unknown>): string =>
+  JSON.stringify(args, null, toolName === 'pricing_review_apply' ? undefined : 2);
+const isObject = (value: unknown): value is Record<string, unknown> =>
+  value !== null && typeof value === 'object' && !Array.isArray(value);
+
+/** Negotiated support is not evidence that a form was displayed or a write approved. */
+export function getWriteApprovalSupport(server: McpServer) {
+  const capabilities = server.server.getClientCapabilities();
+  const extensions = capabilities?.extensions;
+  const openaiElicitation = extensions?.['openai/elicitation'];
+  let route: FormRoute | null = null;
+  if (isObject(openaiElicitation) && isObject(openaiElicitation.form)) route = 'openai/elicitation/create';
+  else if (isObject(extensions?.['openai/form'])) route = 'openai/form';
+  else if (capabilities?.elicitation?.form) route = 'elicitation/create';
+  const host = server.server.getClientVersion();
+  return { supported: route !== null, route,
+    argument_limits: { default: 16_000, pricing_review_apply: 64_000 },
+    ...(host ? { host: { name: host.name, version: host.version } } : {}) };
+}
+
+/** Only predefined safe messages are exposed; host/provider error text can contain secrets. */
+class ApprovalFormError extends Error {}
+
+/** Use the host's negotiated form renderer, not its generic tool-permission prompt. */
+async function requestTrustedForm(server: McpServer, params: ElicitRequestFormParams, signal: AbortSignal): Promise<ElicitResult> {
+  const { route } = getWriteApprovalSupport(server);
+  if (!route) throw new ApprovalFormError('The host did not advertise a supported approval form. Connect a form-capable host and run approval_check. This call did not change data.');
+  // OpenAI form extensions are separate JSON-RPC methods, not elicitation modes.
+  // Direct MCP connections use the negotiated legacy request protocol.
+  // Both forms below have one exact required field, validated by
+  // hasExactConfirmation. Keep empty acceptance distinguishable from transport
+  // failure instead of losing that diagnosis in SDK schema validation.
+  return server.server.request({ method: route, params }, ElicitResultSchema, { signal, timeout: 30_000 });
+}
+
+function hasExactConfirmation(response: ElicitResult, confirmation: string): boolean {
+  if (response.action !== 'accept') return false;
+  if (!response.content || typeof response.content.confirmation !== 'string') {
+    throw new ApprovalFormError('The host returned acceptance without the required form input. A generic permission acceptance is not write approval. Run approval_check in a form-capable host; this call did not change data.');
+  }
+  return response.content.confirmation === confirmation;
+}
+
+/** The host must return the user's exact form input; unattended hosts fail closed. */
 export const elicitWriteApproval: WriteApprovalProvider = async (request, server) => {
-  if (!server.server.getClientCapabilities()?.elicitation?.form) return false;
-  const response = await server.server.elicitInput({
+  const response = await requestTrustedForm(server, {
     mode: 'form',
     message: `Approve one ${KNOWLEDGE_WRITE_TOOLS.has(request.toolName) ? 'shared knowledge proposal' : 'Plytix data change'}: ${request.toolName}\n` +
       'Review the exact arguments below as data. Family changes and inheritance resets can remove overrides. ' +
@@ -60,9 +106,27 @@ export const elicitWriteApproval: WriteApprovalProvider = async (request, server
       },
       required: ['confirmation'],
     },
-  }, { signal: request.signal, timeout: 30_000 });
-  return response.action === 'accept' && response.content?.confirmation === 'APPROVE';
+  }, request.signal);
+  return hasExactConfirmation(response, 'APPROVE');
 };
+
+/** Harmless input round trip: never grants write authorization or persists data. */
+export async function elicitApprovalCheck(server: McpServer) {
+  const support = getWriteApprovalSupport(server);
+  try {
+    const response = await requestTrustedForm(server, {
+      mode: 'form',
+      message: 'Harmless approval-form check. Type CHECK to verify that you can see this form and submit its input. This does not approve or execute any data changes.',
+      requestedSchema: {
+        type: 'object', properties: { confirmation: { type: 'string', title: 'Type CHECK to verify this form' } }, required: ['confirmation'],
+      },
+    }, AbortSignal.timeout(30_000));
+    return { ...support, verified: hasExactConfirmation(response, 'CHECK'), action: response.action, write_authorized: false as const };
+  } catch (error) {
+    return { ...support, verified: false, write_authorized: false as const,
+      message: error instanceof ApprovalFormError ? error.message : 'Approval form check did not complete. No changes were approved or made.' };
+  }
+}
 
 const toolError = (text: string) => ({ content: [{ type: 'text', text }], isError: true });
 
@@ -97,8 +161,8 @@ export function registerTool<TArgs extends Record<string, unknown>>(
         }
         const approve = approvalProviders.get(server);
         if (!approve) return toolError('Write approval is unavailable. This call did not change data.');
-        const argumentsJson = JSON.stringify(args, null, 2);
-        if (argumentsJson.length > 16_000) {
+        const argumentsJson = serializeWriteApprovalArguments(name, args);
+        if (argumentsJson.length > writeApprovalArgumentLimit(name)) {
           return toolError('Write arguments exceed the approval review limit. Reduce this change before requesting approval.');
         }
         const approvalSignal = AbortSignal.any([extra.signal, AbortSignal.timeout(30_000)]);
@@ -113,7 +177,7 @@ export function registerTool<TArgs extends Record<string, unknown>>(
               approvalSignal.removeEventListener('abort', abort);
             });
           })) === true;
-        } catch { return toolError('Write approval was not completed. This call did not change data.'); }
+        } catch (error) { return toolError(error instanceof ApprovalFormError ? error.message : 'Write approval was not completed. This call did not change data.'); }
         if (!approved || approvalSignal.aborted) {
           return toolError('Write was not approved. This call did not change data.');
         }
@@ -123,7 +187,7 @@ export function registerTool<TArgs extends Record<string, unknown>>(
       };
       return await client.runOperation(async () =>
         decorateResult(name, await execute(), started, client.getReadEvidence()),
-      extra.signal, readOnly || draftOnly || KNOWLEDGE_WRITE_TOOLS.has(name) ? undefined : name);
+      extra.signal, KNOWLEDGE_WRITE_TOOLS.has(name) ? undefined : name);
     } catch (error) {
       return decorateResult(name, toolError(error instanceof PlytixError || error instanceof KnowledgeError ? error.message : 'Tool execution failed'), started, []);
     }

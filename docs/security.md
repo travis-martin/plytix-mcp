@@ -32,11 +32,16 @@ See [knowledge operations and limitations](knowledge.md).
   The API client independently requires that allowlist, an active operation for
   the named tool, and the tool's permitted HTTP method and endpoint. A read tool
   cannot mutate data even when a different write tool is enabled.
-- `pricing_import` and `pricing_plan` are explicit local/cloud draft-storage tools,
+- `pricing_import`, `pricing_plan`, `pricing_review_create`,
+  `pricing_review_update` and `pricing_review_plan` are explicit local/cloud draft-storage tools,
   exposed by default with `readOnlyHint: false`, `destructiveHint: false`, and
   `idempotentHint: false`. They save private source/plan files but receive no API
-  mutation authority. `pricing_rules_save` and `pricing_apply` remain hidden until
-  separately allowlisted and require exact host approval.
+  mutation authority. Review row selections, modifications, rejections and notes
+  are durable draft decisions, not permission to change Plytix. `pricing_review_get`
+  reads these decisions and their execution status. `pricing_rules_save`,
+  `pricing_apply` and `pricing_review_apply` remain hidden until separately
+  allowlisted and require exact host approval. Batch apply permits only product
+  PATCH routes; it cannot create/delete products or reset inheritance.
 - Every product, pricing-rule or shared-knowledge mutation requires a trusted approval provider to approve the
   exact validated argument snapshot for that invocation. No `approved` tool
   argument, annotation, service token or previous approval grants this permission.
@@ -55,6 +60,10 @@ See [knowledge operations and limitations](knowledge.md).
   independent copies. This cache is cleared after the invocation and before any
   mutation, never reused for stale post-write verification. Errors are not cached;
   cancellation and deadlines are checked even when a read is already cached.
+- Repeated private pricing/shared-knowledge access checks share successful Plytix
+  authentication only within the active invocation. This authorization memo is
+  cleared before the next invocation; it does not extend credential validity or
+  allow one caller to reuse another caller's private storage scope.
 - Disallowed Origin and Host values are rejected before parsing/executing tools.
   Origin omission is allowed for non-browser MCP clients; it does not bypass
   remote service authentication. CORS never acts as authentication.
@@ -94,15 +103,23 @@ installed. Cloud logging must not add header/body capture.
   requests for form responses and use a separately reviewed configuration.
   These are resource guards, not distributed
   account-wide quotas or a hard billing cap.
-- Each tool operation: 45 seconds and 512 upstream authentication/API requests.
+- Ordinary tool operations: 45 seconds, 512 upstream authentication/API requests,
+  and 8 MiB cumulative upstream JSON. Only `pricing_review_plan` and
+  `pricing_review_apply` receive 80 seconds, 4,096 requests and 64 MiB cumulative
+  upstream JSON, to inspect complete selected container/descendant batches.
   Each individual fetch, including response-body consumption, has a 15-second
-  timeout. Upstream JSON is limited to 5 MiB per response and 8 MiB cumulatively
-  per operation, before buffering or schema caching. Disconnects cancel fetches and retain
+  timeout. Upstream JSON remains limited to 5 MiB per response, before buffering
+  or schema caching. Disconnects cancel fetches and retain
   the active slot until tool work finishes.
 - Write approval has its own 30-second deadline and a 16,000-character argument
-  review limit. A successfully approved write starts a fresh 45-second execution
-  budget while retaining the same concurrency slot. Its total lifetime can reach
-  75 seconds; configure a write client's tool timeout to at least 90 seconds.
+  review limit. Only `pricing_review_apply` permits 64,000 characters and uses
+  compact JSON; every exact manifest field is retained. Other tools keep their
+  formatted JSON and 16,000-character limit. Preparation reports the character
+  count using the same serializer as the approval provider.
+  A successfully approved write starts a fresh execution budget while retaining
+  the same concurrency slot: 45 seconds ordinarily, 80 seconds for batch review
+  apply. Total lifetimes can reach 75 and 110 seconds respectively; configure
+  client tool timeouts to at least 90 seconds ordinarily and 120 seconds for batch apply.
   Oversized actions are refused, never approved from a truncated preview.
   Each subsequent invocation asks again.
 - Attribute label lookup: one exact-label search followed by one detail read;
@@ -154,13 +171,27 @@ is a hint to a client; registration policy and API checks enforce the default.
 
 ### Stdio approval
 
-The stdio entry point uses MCP form elicitation. A compatible host displays the
+The stdio entry point negotiates a form route from the host's advertised client
+capabilities: `extensions["openai/elicitation"].form` uses
+`openai/elicitation/create`, legacy `extensions["openai/form"]` uses
+`openai/form`, and standard `elicitation.form` uses `elicitation/create`.
+The OpenAI extensions are distinct JSON-RPC methods, not standard form modes.
+Unadvertised extension routes are never attempted. A compatible host displays the
 tool name and the complete validated arguments and asks the user to type
 `APPROVE`. Only an accepted form with that exact confirmation permits the
 invocation. Hosts without form elicitation cannot execute writes. The host is
 trusted to present the form to a human; a malicious host can impersonate that
 human, just as it already controls the locally supplied Plytix credentials.
 Verify the chosen host's actual approval UI before enabling its write connection.
+`approval_capabilities` reports the negotiated route and argument limits without
+showing a form. Advertised support is not proof that a form was displayed.
+`approval_check` performs a harmless `CHECK` input round trip using that route;
+it never grants write authorization or changes data. Both tools are available
+without a write allowlist. A generic accepted permission prompt with missing
+form input fails closed and returns a specific diagnostic. Decline, cancellation
+or incomplete input never triggers a retry through another form route.
+An SDK fixture passing this exchange is not proof that a particular desktop
+client displays it; verify the check in the intended live host after connection.
 
 Use separate named connections with `PLYTIX_WRITE_TOOLS=[]` for read-only work
 and an explicit minimal list for approved writes. These use the same implementation
@@ -181,6 +212,7 @@ the host to display a human approval is identical to stdio; this does not turn a
 shared service secret into public multi-user identity or OAuth. The service token
 is mandatory even on loopback in this mode. Sessions are ephemeral; durable pricing
 plans and their consumed state remain in the configured file/GCS backend.
+The same capability diagnostics and harmless input check apply to these sessions.
 
 An embedding application may supply the code-level `requestWriteApproval`
 callback to `createHttpApp`. It must obtain an independent user approval for the

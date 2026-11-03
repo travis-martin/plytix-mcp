@@ -42,6 +42,10 @@ export class PlytixClient {
   private token?: PlytixAuthToken;
   private tokenRequest?: Promise<string>;
   private operationDeadline = Date.now() + 45_000;
+  private operationDurationMs = 45_000;
+  private operationRequestLimit = 512;
+  private operationResponseLimit = 8 * 1024 * 1024;
+  private knowledgeVerification?: Promise<string>;
   private requestCount = 0;
   private responseBytes = 0;
   private cancelled = false;
@@ -57,7 +61,12 @@ export class PlytixClient {
   async verifyKnowledgeAccess(): Promise<void> {
     // Reauthenticate for shared knowledge access; a previously cached token must
     // not keep a revoked credential's shared knowledge accessible indefinitely.
-    await this.authenticate();
+    // Review helpers may reopen many private plans in one invocation. Verify
+    // once per operation, never reuse this authorization across invocations.
+    if (this.activeOperation) {
+      this.knowledgeVerification ??= this.authenticate();
+      await this.knowledgeVerification;
+    } else await this.authenticate();
     this.assertActive();
   }
   getReadEvidence(): ReadEvidence[] { return structuredClone(this.readEvidence); }
@@ -72,7 +81,12 @@ export class PlytixClient {
   runOperation<T>(work: () => Promise<T>, signal?: AbortSignal, toolName?: string): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
     if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
-    this.operationDeadline = Date.now() + 45_000;
+    const batchReview = toolName === 'pricing_review_plan' || toolName === 'pricing_review_apply';
+    this.operationDurationMs = batchReview ? 80_000 : 45_000;
+    this.operationRequestLimit = batchReview ? 4096 : 512;
+    this.operationResponseLimit = (batchReview ? 64 : 8) * 1024 * 1024;
+    this.operationDeadline = Date.now() + this.operationDurationMs;
+    this.knowledgeVerification = undefined;
     this.requestCount = 0;
     this.responseBytes = 0;
     this.readEvidence = [];
@@ -87,6 +101,7 @@ export class PlytixClient {
       this.operationSignal = undefined;
       this.operationTool = undefined;
       this.operationReads = undefined;
+      this.knowledgeVerification = undefined;
       this.activeOperation = undefined;
     });
     this.activeOperation = pending;
@@ -103,7 +118,7 @@ export class PlytixClient {
     }
     // Human review consumes its own bounded 30-second window. Start the API
     // execution budget only after approval, before authentication or any fetch.
-    this.operationDeadline = Date.now() + 45_000;
+    this.operationDeadline = Date.now() + this.operationDurationMs;
   }
 
   cancel(): void {
@@ -112,12 +127,12 @@ export class PlytixClient {
   }
 
   private assertActive(): void {
-    if (this.cancelled || this.operationSignal?.aborted || Date.now() >= this.operationDeadline) throw new PlytixError('Plytix operation cancelled or exceeded its 45 second budget');
+    if (this.cancelled || this.operationSignal?.aborted || Date.now() >= this.operationDeadline) throw new PlytixError(`Plytix operation cancelled or exceeded its ${this.operationDurationMs / 1000} second budget`);
   }
 
   private requestTimeout(): number {
     this.assertActive();
-    if (++this.requestCount > 512) throw new PlytixError('Plytix operation exceeded its 512 request budget');
+    if (++this.requestCount > this.operationRequestLimit) throw new PlytixError(`Plytix operation exceeded its ${this.operationRequestLimit} request budget`);
     return Math.min(this.config.timeoutMs, this.operationDeadline - Date.now());
   }
   private config: Required<PlytixClientConfig>;
@@ -167,7 +182,7 @@ export class PlytixClient {
       if (done) break;
       total += value.byteLength;
       this.responseBytes += value.byteLength;
-      if (this.responseBytes > 8 * 1024 * 1024) {
+      if (this.responseBytes > this.operationResponseLimit) {
         await reader.cancel();
         throw new PlytixError('Plytix operation exceeds aggregate response size limit');
       }

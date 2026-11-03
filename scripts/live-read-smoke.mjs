@@ -53,7 +53,7 @@ try {
   await client.connect(transport);
   const catalog = await client.listTools();
   available = new Map(catalog.tools.map(tool => [tool.name, tool]));
-  const localDrafts = new Set(['pricing_import', 'pricing_plan']);
+  const localDrafts = new Set(['pricing_import', 'pricing_plan', 'pricing_review_create', 'pricing_review_update', 'pricing_review_plan']);
   if (catalog.tools.some(tool => tool.annotations?.readOnlyHint !== true && !localDrafts.has(tool.name))) throw new Error('Unexpected write exposure');
   await check('server_capabilities');
   await check('discovery_guide');

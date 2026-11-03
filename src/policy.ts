@@ -1,5 +1,5 @@
 export const WRITE_TOOLS = new Set([
-  'pricing_apply', 'pricing_rules_save',
+  'pricing_apply', 'pricing_rules_save', 'pricing_review_apply',
   'products_create', 'products_update', 'products_assign_family',
   'products_set_attribute', 'products_clear_attribute',
   'families_create', 'families_link_attribute', 'families_unlink_attribute',
@@ -10,7 +10,8 @@ export const WRITE_TOOLS = new Set([
 
 export const READ_TOOLS = new Set([
   'catalog_workspace',
-  'pricing_rules_get', 'pricing_plan_get',
+  'approval_capabilities', 'approval_check',
+  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',
@@ -25,7 +26,7 @@ export const READ_TOOLS = new Set([
 ]);
 
 // Default previews save private local drafts but never authorize Plytix mutations.
-export const LOCAL_DRAFT_TOOLS = new Set(['pricing_import', 'pricing_plan']);
+export const LOCAL_DRAFT_TOOLS = new Set(['pricing_import', 'pricing_plan', 'pricing_review_create', 'pricing_review_update', 'pricing_review_plan']);
 export const DEFAULT_TOOLS = new Set([...READ_TOOLS, ...LOCAL_DRAFT_TOOLS]);
 
 export const KNOWLEDGE_WRITE_TOOLS = new Set(['knowledge_propose']);
@@ -63,6 +64,7 @@ export function isReadRequest(endpoint: string, method = 'GET'): boolean {
 // In particular, an allowed update must never authorize a create/delete route.
 const WRITE_ROUTES: Record<string, { method: string; path: RegExp }> = {
   pricing_apply: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
+  pricing_review_apply: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
   products_create: { method: 'POST', path: /^\/api\/v2\/products$/ },
   products_update: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
   products_set_attribute: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },

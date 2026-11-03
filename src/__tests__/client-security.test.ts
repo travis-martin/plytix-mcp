@@ -122,4 +122,41 @@ describe('Plytix API security boundaries', () => {
     await expect(client.runOperation(() => client.getAttributeByLabel('field_249'))).resolves.toMatchObject({ id: '249' });
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
+
+  it('deduplicates private-store authentication only within the current operation', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => auth());
+    const client = new PlytixClient(credentials);
+    await client.runOperation(async () => {
+      await Promise.all([client.verifyKnowledgeAccess(), client.verifyKnowledgeAccess()]);
+      await client.verifyKnowledgeAccess();
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    fetchMock.mockResolvedValueOnce(new Response('', { status: 401 }));
+    await expect(client.runOperation(() => client.verifyKnowledgeAccess())).rejects.toThrow('authentication failed');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('bounds expanded review reads without increasing ordinary tool budgets or write authority', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async url => String(url).includes('/auth/') ? auth() : Response.json({ data: [] }));
+    const client = new PlytixClient(credentials);
+    await expect(client.runOperation(async () => {
+      for (let i = 0; i < 513; i++) await client.getProduct(`fixture-${i}`);
+      await expect(client.updateProduct('fixture', { attributes: { cost: 1 } })).rejects.toThrow('Writes are disabled');
+    }, undefined, 'pricing_review_plan')).resolves.toBeUndefined();
+    await expect(client.runOperation(async () => {
+      for (let i = 0; i < 513; i++) await client.getProduct(`fixture-${i}`);
+    }, undefined, 'products_get')).rejects.toThrow('512 request budget');
+    await expect(client.runOperation(async () => {
+      for (let i = 0; i < 4097; i++) await client.getProduct(`fixture-${i}`);
+    }, undefined, 'pricing_review_plan')).rejects.toThrow('4096 request budget');
+  });
+
+  it('uses the bounded review deadline only for named review planning and execution', async () => {
+    const client = new PlytixClient(credentials);
+    const clock = vi.spyOn(Date, 'now');
+    let time = 1_000; clock.mockImplementation(() => time);
+    await client.runOperation(async () => { time += 46_000; client.checkOperationActive(); }, undefined, 'pricing_review_plan');
+    await expect(client.runOperation(async () => { time += 46_000; client.checkOperationActive(); }, undefined, 'products_get')).rejects.toThrow('45 second budget');
+    await expect(client.runOperation(async () => { time += 81_000; client.checkOperationActive(); }, undefined, 'pricing_review_apply')).rejects.toThrow('80 second budget');
+  });
 });

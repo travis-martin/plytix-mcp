@@ -46,9 +46,11 @@ See Google's [concurrency](https://docs.cloud.google.com/run/docs/about-concurre
 [session affinity](https://docs.cloud.google.com/run/docs/configuring/session-affinity),
 and [service URL](https://docs.cloud.google.com/run/docs/triggering/https-request#deterministic-url) guidance.
 
-Explicit write allowlists should contain only `pricing_rules_save` and
-`pricing_apply` for the pricing connection. All writes still require individual
-form approval. Use a separate connection with an empty write allowlist for
+Pricing write allowlists can contain `pricing_rules_save`, `pricing_apply`, and
+`pricing_review_apply` as individually authorized by the operator. The review
+tool applies an exact selected subset across saved plans after one trusted form
+approval; each product and descendant effect is included. Selection and draft
+editing do not grant write approval. Use a separate connection with an empty write allowlist for
 exploration. Set the desktop tool timeout to at least 120 seconds.
 
 Release requires fixture tests for both transports, cross-credential rejection,

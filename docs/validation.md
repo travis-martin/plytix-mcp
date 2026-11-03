@@ -1,5 +1,26 @@
 # Validation
 
+## Version 0.7.0 — November 3, 2026
+
+| Check | Result |
+| --- | --- |
+| Typecheck / build / fixture tests | Pass; 289 tests across 26 files on Windows |
+| Container owners | Verified root ancestry, family attribute level, complete child membership, explicit overrides, bounded parallel reads and structural/numeric readback covered |
+| Durable review | Individual/batch decisions, manual amounts, original source preservation, revision conflicts, exact selected manifests, execution races, historical uncertainty and retry prevention covered |
+| Representative batch | Fixture with 26 containers and 260 children passes; every owner verified and each explicit child override preserved; writes remain sequential |
+| Approval protocol | Native modern/legacy and standard routes, exact input, empty/generic acceptance rejection, harmless check, complete compact manifests and size refusal covered |
+| Interactive workspace | 31 browser checks pass at 1440×1100 and 390×844, including direct review opening, checked subsets, saved instruction handoff and oversized-manifest refusal |
+| Portable plugin | Build/archive validation and isolated no-network startup pass; 48 default tools; private records excluded |
+| Dependency audit | No production vulnerabilities reported by npm audit |
+| Actual host form | Native route advertised by the current desktop client; a helper-agent CHECK was immediately declined without visible form; main-chat human input round trip remains unverified |
+| Remote release / real price-list execution | Pending deployment approval and main-chat harmless form check; no live product mutation performed |
+
+Mock timing does not establish live API latency, rate-limit behavior or cloud
+execution time. Persisted per-line outcomes remain authoritative after a timeout;
+uncertain plans cannot be replayed. Native route advertisement and fixture UI
+checks do not prove the desktop displayed an approval form. A helper-agent decline
+without visible UI is not evidence of a human rejection.
+
 ## Version 0.6.0 — November 3, 2026
 
 | Check | Result |

@@ -17,13 +17,14 @@ import { registerDiscoveryTools, DISCOVERY_INSTRUCTIONS } from './tools/discover
 import { KnowledgeService } from './knowledge/service.js';
 import { registerPricingTools } from './tools/pricing.js';
 import { registerWorkspaceTools } from './tools/workspace.js';
+import { registerApprovalTools } from './tools/approval.js';
 import type { KnowledgeRegistry } from './knowledge/registry.js';
 
 export function createServer(
   client: PlytixClient, writeTools: ReadonlySet<string> = new Set(),
   options: ToolPolicyOptions & { knowledgeRegistry?: KnowledgeRegistry } = {},
 ) {
-  const server = new McpServer({ name: 'plytix-mcp', version: '0.6.0' }, { instructions: DISCOVERY_INSTRUCTIONS });
+  const server = new McpServer({ name: 'plytix-mcp', version: '0.7.0' }, { instructions: DISCOVERY_INSTRUCTIONS });
   const knowledge = options.knowledge ?? new KnowledgeService(client, options.knowledgeRegistry, options.knowledgeWriteTools);
   configureToolPolicy(server, writeTools, client, { ...options, knowledge });
   registerProductTools(server, client);
@@ -36,6 +37,7 @@ export function createServer(
   registerRelationshipTools(server, client);
   registerIdentifierTools(server);
   registerCapabilityTools(server);
+  registerApprovalTools(server);
   registerSchemaTools(server, client);
   registerInheritanceTools(server, client);
   registerDiscoveryTools(server, client, knowledge);
