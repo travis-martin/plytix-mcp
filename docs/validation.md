@@ -1,5 +1,35 @@
 # Validation
 
+## Version 0.8.0 — November 3, 2026
+
+- Implementation checkpoint: `8cd0989`, pushed to main and develop/cloud-run.
+- Local typecheck/build and all 346 fixture tests across 30 files passed.
+- The browser fixture passed 42 checks at 1440×1100 and 390×844, including large
+  selections, deferred work, mixed ready/changed rows and scoped dictionary reads.
+- Portable archive validation and isolated startup passed: 10 files, four skills,
+  50 default tools, no network or real credentials in package tests.
+- The installed private local plugin reports 0.8.0, 73 tools, 23 enabled catalog
+  writes and host approval mode. Current credentials passed bounded rule and
+  dictionary reads; no catalog mutation was used for verification.
+- Both branch CI runs passed. Release run `41633583193` passed Node 22/24
+  validation, container smoke testing and immutable image publication.
+
+Fixture performance evidence: 100 source SKUs require one search instead of 100;
+100 compatible review lines produce one plan with one source/rule/history read.
+The 26-owner, 260-descendant case fits one exact approval and preserves overrides
+with sequential writes and readback. These are call-count/behavior fixtures, not
+a production throughput benchmark. Payload, request and execution-time limits
+can still defer work; verified and uncertain outcomes remain protected from replay.
+
+Dictionary tests cover bounded retention, repeat-event stability, source evidence,
+manual/retirement protection, stale rule aliases, credential isolation and storage
+failure reporting. Current Plytix schema remains authoritative. See
+[pricing storage compatibility](pricing.md) before rolling back to an older binary.
+
+The remote service remains on its previously approved version until this release's
+immutable image receives separate deployment approval. Image publication alone
+does not establish remote activation or authorize product changes.
+
 ## Version 0.7.1 — November 3, 2026
 
 - Typecheck/build and 305 fixture tests pass. Sixteen new tests cover explicit host
