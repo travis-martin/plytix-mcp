@@ -15,7 +15,9 @@
 | Container | Node 24, non-root, 0.25 CPU / 256 MiB fixture smoke passed; authenticated SDK handshake and blocked catalog mutation verified |
 | Remote header helper | Sixteen fixture checks cover configuration, private header output, safe errors, subprocess bounds and Windows launchers |
 | CI / image publication | Node 22/24 validation and image publication passed for 30f3bf; clean runner now builds host modules before container smoke |
-| Live price updates / initial cloud deployment | Not performed; require exact action approval |
+| Initial private cloud deployment | Approved deployment completed; ready revision, pinned image/secret, private IAM, scoped bucket access and single-instance caps verified |
+| Remote reads / connection | Authenticated SDK discovers 44 tools; five bounded read calls and workspace resource pass; native Codex remote configuration installed |
+| Live price updates | Not performed; require uploaded source, reviewed rules and exact change approval |
 
 The pricing HTTP mode has a separate deployment template with one CPU, 512 MiB,
 concurrency 16 and a 120-second timeout so persistent event streams do not starve
@@ -27,6 +29,10 @@ used for release testing. PDF/XLSX extraction remains the host's responsibility.
 The installed plugin requires host refresh/new-task discovery before its tools
 appear in an already-open chat. Local and remote handlers share source, but their
 private file stores do not synchronize automatically.
+The remote credential helper was also executed with privately captured output;
+only pass/fail was logged. It reuses the existing Google sign-in and does not
+create credentials. The actual Codex approval form still needs a user-reviewed
+pricing action in a refreshed chat; deployment checks never approve a mutation.
 
 ## Version 0.5.0 — October 20, 2026
 

@@ -9,6 +9,7 @@ metadata:
   annotations:
     run.googleapis.com/ingress: all
     run.googleapis.com/invoker-iam-disabled: 'false'
+    run.googleapis.com/maxScale: '1'
 spec:
   template:
     metadata:
