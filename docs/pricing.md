@@ -1,5 +1,12 @@
 # Reviewed price-list updates
 
+For a private operator connection configured with `MCP_WRITE_APPROVAL_MODE=host`,
+review and authorize the exact update through the client's normal tool permission
+flow. There is no second typed APPROVE form. Default `form` mode retains it.
+Check `approval_capabilities` for the active mode and enabled writes; a missing
+form is expected in host mode. The planning, validation and audit requirements
+below apply to both modes.
+
 The same pricing implementation runs through stdio and HTTP. A price-list import
 suggests family mappings first. It never assigns families, writes prices, or
 automatically confirms a learned business rule.

@@ -24,7 +24,7 @@ export function createServer(
   client: PlytixClient, writeTools: ReadonlySet<string> = new Set(),
   options: ToolPolicyOptions & { knowledgeRegistry?: KnowledgeRegistry } = {},
 ) {
-  const server = new McpServer({ name: 'plytix-mcp', version: '0.7.0' }, { instructions: DISCOVERY_INSTRUCTIONS });
+  const server = new McpServer({ name: 'plytix-mcp', version: '0.7.1' }, { instructions: DISCOVERY_INSTRUCTIONS });
   const knowledge = options.knowledge ?? new KnowledgeService(client, options.knowledgeRegistry, options.knowledgeWriteTools);
   configureToolPolicy(server, writeTools, client, { ...options, knowledge });
   registerProductTools(server, client);

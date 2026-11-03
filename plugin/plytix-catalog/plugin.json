@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "plytix-catalog",
-  "version": "0.7.0",
+  "version": "0.7.1",
   "description": "Explore Plytix catalogs, explain inheritance, and review price-list updates with explicit approval and inspectable rules.",
   "license": "MIT",
   "extensions": {
@@ -11,7 +11,9 @@
         "shortDescription": "Catalog and pricing review",
         "longDescription": "Discover catalog schema, inspect products and variants, and turn supplied price lists into reviewed updates using the existing Plytix MCP server.",
         "category": "Business & Operations",
-        "capabilities": ["Interactive"],
+        "capabilities": [
+          "Interactive"
+        ],
         "defaultPrompt": [
           "Explore my product catalog and explain its families and important attributes.",
           "Review this price list and suggest family mappings before proposing product updates.",

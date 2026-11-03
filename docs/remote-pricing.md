@@ -1,5 +1,19 @@
 # Private remote pricing
 
+For a trusted private operator, `MCP_WRITE_APPROVAL_MODE=host` uses Codex's normal
+tool permissions and removes the duplicate server form. Only named tools in
+`PLYTIX_WRITE_TOOLS` become available. This mode works with or without sessions;
+the existing private pricing deployment can retain its sessions. Keep native
+client tool permissions set to prompt. The server delegates approval to that
+client; it cannot prove that a human saw a prompt. Direct authenticated clients
+can invoke enabled writes, so do not use this mode for an untrusted/public gateway.
+Default `form` mode retains the additional form behavior described below.
+
+Use `approval_capabilities` or `server_capabilities` to inspect the effective mode
+and write list. Host mode does not require `approval_check` to succeed. Reconnect
+after API-key changes: native helper headers are cached by the client. A changed
+credential pair has a separate rules/plan namespace. Never migrate it implicitly.
+
 Local stdio and remote HTTP use the same pricing handlers, rules, calculations,
 plan checks and API policy. HTTP remains stateless and without write approval by
 default. `MCP_APPROVAL_SESSIONS=true` explicitly enables an authenticated,

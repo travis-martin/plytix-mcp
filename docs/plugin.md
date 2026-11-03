@@ -41,10 +41,17 @@ For this checkout's private installation, `npm run plugin:prepare-local` creates
 an ignored marketplace under `.local/plugin-marketplace` from the validated
 portable package. Its private `mcp.json` references the existing `.env` by absolute
 path, uses `.local/pricing` for durable local records, and explicitly exposes only
-`pricing_rules_save` and `pricing_apply` as approved writes. It never copies or
+`pricing_rules_save`, `pricing_apply` and `pricing_review_apply` as approved writes. It never copies or
 prints credentials, edits the existing direct MCP connection, or installs itself.
 Each write still requires the complete trusted host approval form. The portable
 archive keeps its default product-write-disabled configuration.
+
+For an explicitly authorized private operator installation, pass
+`npm run plugin:prepare-local -- --host-writes --all-write-tools` to use native
+host tool permissions with all named catalog writes. Omit `--all-write-tools`
+to retain just the three pricing writes. Omit `--host-writes` to retain the
+additional server form. Neither flag changes the portable package defaults.
+Host mode relies on the client's permission policy; keep it set to prompt.
 
 Install that prepared private source with the supported local CLI:
 

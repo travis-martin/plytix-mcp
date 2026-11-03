@@ -30,6 +30,16 @@ export const LOCAL_DRAFT_TOOLS = new Set(['pricing_import', 'pricing_plan', 'pri
 export const DEFAULT_TOOLS = new Set([...READ_TOOLS, ...LOCAL_DRAFT_TOOLS]);
 
 export const KNOWLEDGE_WRITE_TOOLS = new Set(['knowledge_propose']);
+
+/** Operator configuration only; never negotiated from client/tool arguments. */
+export type WriteApprovalMode = 'form' | 'host';
+export function parseWriteApprovalMode(value: string = 'form'): WriteApprovalMode {
+  if (value !== 'form' && value !== 'host') {
+    throw new Error('MCP_WRITE_APPROVAL_MODE must be form or host');
+  }
+  return value;
+}
+
 export function parseKnowledgeWriteTools(value = '[]'): Set<string> {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch { throw new Error('MCP_KNOWLEDGE_WRITE_TOOLS must be a JSON array'); }

@@ -16,6 +16,7 @@ type Callback = (args: Record<string, unknown>, extra: { signal: AbortSignal }) 
 function toolsFor(register: (server: McpServer, client: PlytixClient) => void, methods: Record<string, unknown> = {}) {
   const definitions = new Map<string, { inputSchema: ZodRawShape; description: string; callback: Callback }>();
   const server = {
+    server: { getClientCapabilities: () => ({}), getClientVersion: () => undefined },
     registerTool(name: string, definition: { inputSchema: ZodRawShape; description: string }, callback: Callback) {
       definitions.set(name, { ...definition, callback });
     },

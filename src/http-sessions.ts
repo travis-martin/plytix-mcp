@@ -52,7 +52,8 @@ export function registerApprovalSessions(app: Express, config: HttpConfig) {
         const client = new PlytixClient({ apiKey: key, apiPassword: password, allowWrites: config.writeTools.size > 0, writeTools: config.writeTools });
         const server = createServer(client, config.writeTools, {
           knowledgeRegistry: config.knowledgeRegistry, knowledgeWriteTools: config.knowledgeWriteTools,
-          requestWriteApproval: elicitWriteApproval,
+          writeApprovalMode: config.writeApprovalMode,
+          requestWriteApproval: config.writeApprovalMode === 'host' ? undefined : elicitWriteApproval,
         });
         const sessionId = id;
         const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => sessionId });

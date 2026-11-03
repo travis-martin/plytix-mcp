@@ -1,5 +1,33 @@
 # Security and operational limits
 
+## Private operator write permissions
+
+`MCP_WRITE_APPROVAL_MODE=form` is the default. An operator can explicitly select
+`host` to use the trusted MCP client's native tool permissions without the second
+typed APPROVE form. This applies equally to stdio and authenticated HTTP, including
+stateless HTTP. It is configuration, never a model/tool argument; invalid values
+fail startup. A custom approval provider cannot be combined with host mode.
+The form-specific guarantees below apply to form mode only.
+
+Host mode delegates authorization: the server cannot verify that the host showed
+a human prompt. Any authenticated direct client holding the service and Plytix
+credentials can invoke enabled write tools in this mode. Use it only for private
+operator connections, with host tool permissions set to prompt and user authority
+for the requested action. It is not a public multi-user mode. The host's own
+approval, denial and cancellation controls are not changed.
+
+Both modes retain the named write allowlist, API-route enforcement, credential
+authentication, immutable validated arguments, cancellation and resource limits.
+Pricing retains fresh-plan checks, rule validation, inheritance checks, one-shot
+reservations, readback and audit records. Host mode does not authorize extra API
+endpoints or override upstream API-key permissions.
+
+`approval_capabilities` and `server_capabilities` expose active mode and enabled
+writes. `approval_check` shows no form in host mode and never claims verified
+human approval. A new server instance is required after configuration changes.
+Reconnect the MCP client after changing API keys so cached helper headers refresh;
+credential-scoped rules and plans are not automatically migrated to another key.
+
 ## Shared knowledge boundary (0.5)
 
 Shared knowledge is optional and requires an operator-owned registry. Connection

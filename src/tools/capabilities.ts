@@ -1,5 +1,5 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { registerTool } from './register.js';
+import { registerTool, getWriteApprovalSupport } from './register.js';
 
 export function registerCapabilityTools(server: McpServer) {
   registerTool<Record<string, never>>(server, 'server_capabilities', {
@@ -48,7 +48,7 @@ export function registerCapabilityTools(server: McpServer) {
         write_safety: {
           default: 'Read-only. Write tools are hidden unless explicitly allowlisted.',
           enforcement: 'Tool allowlist and API-layer write authorization apply to stdio and HTTP.',
-          approval: 'Every write requires approval of the exact arguments through a trusted host approval provider. The stdio host uses MCP form elicitation; unsupported clients fail closed. A tool argument is not proof of human approval.',
+          approval: getWriteApprovalSupport(server),
           live_verification: 'Automated tests use mocks. Live writes and deployment require exact action-time approval.',
         },
       }, null, 2),

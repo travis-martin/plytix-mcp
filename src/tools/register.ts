@@ -1,7 +1,7 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ElicitResultSchema, type ElicitRequestFormParams, type ElicitResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ZodRawShape } from 'zod';
-import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS, LOCAL_DRAFT_TOOLS } from '../policy.js';
+import { READ_TOOLS, WRITE_TOOLS, KNOWLEDGE_WRITE_TOOLS, LOCAL_DRAFT_TOOLS, parseWriteApprovalMode, type WriteApprovalMode } from '../policy.js';
 import type { PlytixClient } from '../client.js';
 import type { KnowledgeService } from '../knowledge/service.js';
 import { decorateResult, outputSchemaForTool, type ToolResult } from '../results.js';
@@ -27,20 +27,29 @@ export interface WriteApprovalRequest {
 export type WriteApprovalProvider = (request: WriteApprovalRequest, server: McpServer) => Promise<boolean>;
 export interface ToolPolicyOptions {
   requestWriteApproval?: WriteApprovalProvider;
+  /** Explicit operator trust in the host's tool permissions; defaults to a server form. */
+  writeApprovalMode?: WriteApprovalMode;
   knowledge?: KnowledgeService;
   knowledgeWriteTools?: ReadonlySet<string>;
 }
 const policies = new WeakMap<McpServer, ReadonlySet<string>>();
 const clients = new WeakMap<McpServer, PlytixClient>();
 const approvalProviders = new WeakMap<McpServer, WriteApprovalProvider>();
+const approvalModes = new WeakMap<McpServer, WriteApprovalMode>();
 const knowledgeServices = new WeakMap<McpServer, KnowledgeService>();
 export function configureToolPolicy(
   server: McpServer, writes: ReadonlySet<string>, client: PlytixClient, options: ToolPolicyOptions = {},
 ) {
+  const mode = parseWriteApprovalMode(options.writeApprovalMode);
+  if (mode === 'host' && options.requestWriteApproval) {
+    throw new Error('Host approval mode cannot be combined with a custom approval provider');
+  }
   for (const name of writes) if (!WRITE_TOOLS.has(name)) throw new Error('Unknown write tool');
   for (const name of options.knowledgeWriteTools ?? []) if (!KNOWLEDGE_WRITE_TOOLS.has(name)) throw new Error('Unknown knowledge write tool');
   policies.set(server, new Set([...writes, ...options.knowledgeWriteTools ?? []]));
   clients.set(server, client);
+  approvalModes.set(server, mode);
+  approvalProviders.delete(server);
   if (options.requestWriteApproval) approvalProviders.set(server, options.requestWriteApproval);
   if (options.knowledge) knowledgeServices.set(server, options.knowledge);
 }
@@ -55,6 +64,7 @@ const isObject = (value: unknown): value is Record<string, unknown> =>
 
 /** Negotiated support is not evidence that a form was displayed or a write approved. */
 export function getWriteApprovalSupport(server: McpServer) {
+  const mode = approvalModes.get(server) ?? 'form';
   const capabilities = server.server.getClientCapabilities();
   const extensions = capabilities?.extensions;
   const openaiElicitation = extensions?.['openai/elicitation'];
@@ -63,7 +73,14 @@ export function getWriteApprovalSupport(server: McpServer) {
   else if (isObject(extensions?.['openai/form'])) route = 'openai/form';
   else if (capabilities?.elicitation?.form) route = 'elicitation/create';
   const host = server.server.getClientVersion();
-  return { supported: route !== null, route,
+  return { supported: mode === 'host' || route !== null, route: mode === 'host' ? null : route,
+    form_supported: route !== null, mode,
+    authorization_source: mode === 'host' ? 'host_tool_permission' as const : 'server_form' as const,
+    nested_form_required: mode === 'form',
+    enabled_write_tools: [...policies.get(server) ?? []].sort(),
+    detail: mode === 'host'
+      ? 'The operator delegates write authorization to the trusted host tool-permission policy. This server does not verify that a human prompt was displayed or accepted.'
+      : 'Each enabled write also requires the server approval form. Negotiated form support does not prove that a human has approved a change.',
     argument_limits: { default: 16_000, pricing_review_apply: 64_000 },
     ...(host ? { host: { name: host.name, version: host.version } } : {}) };
 }
@@ -113,6 +130,10 @@ export const elicitWriteApproval: WriteApprovalProvider = async (request, server
 /** Harmless input round trip: never grants write authorization or persists data. */
 export async function elicitApprovalCheck(server: McpServer) {
   const support = getWriteApprovalSupport(server);
+  if (support.mode === 'host') {
+    return { ...support, verified: false, write_authorized: false as const,
+      message: 'No additional server form is required in host mode. Review and authorize writes through the trusted host. This diagnostic does not verify host permission settings or approve a write.' };
+  }
   try {
     const response = await requestTrustedForm(server, {
       mode: 'form',
@@ -159,28 +180,34 @@ export function registerTool<TArgs extends Record<string, unknown>>(
           }
           return result;
         }
+        const mode = approvalModes.get(server) ?? 'form';
         const approve = approvalProviders.get(server);
-        if (!approve) return toolError('Write approval is unavailable. This call did not change data.');
+        if (mode === 'form' && !approve) return toolError('Write approval is unavailable. This call did not change data.');
         const argumentsJson = serializeWriteApprovalArguments(name, args);
         if (argumentsJson.length > writeApprovalArgumentLimit(name)) {
           return toolError('Write arguments exceed the approval review limit. Reduce this change before requesting approval.');
         }
-        const approvalSignal = AbortSignal.any([extra.signal, AbortSignal.timeout(30_000)]);
-        const request = Object.freeze({ toolName: name, argumentsJson, signal: approvalSignal });
-        let approved = false;
-        try {
-          approved = (await new Promise<boolean>((resolve, reject) => {
-            const abort = () => reject(new Error('Write approval cancelled'));
-            approvalSignal.addEventListener('abort', abort, { once: true });
-            if (approvalSignal.aborted) { abort(); return; }
-            Promise.resolve().then(() => approve(request, server)).then(resolve, reject).finally(() => {
-              approvalSignal.removeEventListener('abort', abort);
-            });
-          })) === true;
-        } catch (error) { return toolError(error instanceof ApprovalFormError ? error.message : 'Write approval was not completed. This call did not change data.'); }
-        if (!approved || approvalSignal.aborted) {
-          return toolError('Write was not approved. This call did not change data.');
+        if (mode === 'form') {
+          const approvalSignal = AbortSignal.any([extra.signal, AbortSignal.timeout(30_000)]);
+          const request = Object.freeze({ toolName: name, argumentsJson, signal: approvalSignal });
+          let approved = false;
+          try {
+            approved = (await new Promise<boolean>((resolve, reject) => {
+              const abort = () => reject(new Error('Write approval cancelled'));
+              approvalSignal.addEventListener('abort', abort, { once: true });
+              if (approvalSignal.aborted) { abort(); return; }
+              Promise.resolve().then(() => approve!(request, server)).then(resolve, reject).finally(() => {
+                approvalSignal.removeEventListener('abort', abort);
+              });
+            })) === true;
+          } catch (error) { return toolError(error instanceof ApprovalFormError ? error.message : 'Write approval was not completed. This call did not change data.'); }
+          if (!approved || approvalSignal.aborted) {
+            return toolError('Write was not approved. This call did not change data.');
+          }
         }
+        // Host mode relies on the explicitly trusted client's tool permissions;
+        // it does not manufacture a form response or infer human confirmation.
+        if (extra.signal.aborted) return toolError('Write was cancelled. This call did not change data.');
         if (KNOWLEDGE_WRITE_TOOLS.has(name)) knowledgeServices.get(server)!.beginApprovedProposal();
         else client.beginApprovedWrite();
         return handler(JSON.parse(argumentsJson) as TArgs);

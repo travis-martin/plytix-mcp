@@ -3,8 +3,8 @@ import { elicitApprovalCheck, getWriteApprovalSupport, registerTool } from './re
 
 export function registerApprovalTools(server: McpServer) {
   registerTool(server, 'approval_capabilities', {
-    title: 'Inspect Approval Form Support',
-    description: 'Read negotiated host form support. Does not show a form, grant approval, or change data. Advertised support alone does not prove the form is visible.',
+    title: 'Inspect Write Permission Mode',
+    description: 'Read the configured authorization mode, enabled write tools and form support. Host mode uses client tool permissions without a second form; form mode requires the server form. Does not grant approval or change data.',
     inputSchema: {},
   }, async () => ({
     content: [{ type: 'text', text: JSON.stringify({ ...getWriteApprovalSupport(server), write_authorized: false }) }],
@@ -12,7 +12,7 @@ export function registerApprovalTools(server: McpServer) {
   }));
   registerTool(server, 'approval_check', {
     title: 'Check Approval Form Without Changing Data',
-    description: 'Show a harmless CHECK form using the negotiated host route. Verifies submitted form input only; never approves a write or changes data. Use before retrying a missing approval form.',
+    description: 'In form mode, show a harmless CHECK form. In host mode, report delegated client authorization without showing a form. Never approves a write or changes data.',
     inputSchema: {},
   }, async () => ({
     content: [{ type: 'text', text: JSON.stringify(await elicitApprovalCheck(server)) }],

@@ -4,7 +4,7 @@ import express from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { PlytixClient } from './client.js';
 import { createServer } from './server.js';
-import { parseWriteTools, parseKnowledgeWriteTools } from './policy.js';
+import { parseWriteTools, parseKnowledgeWriteTools, parseWriteApprovalMode, type WriteApprovalMode } from './policy.js';
 import type { WriteApprovalProvider } from './tools/register.js';
 import { KnowledgeRegistry } from './knowledge/registry.js';
 import { registerApprovalSessions } from './http-sessions.js';
@@ -19,6 +19,8 @@ export interface HttpConfig {
   maxConcurrentRequests?: number;
   /** Opt-in trusted-host form elicitation; private authenticated clients only. */
   approvalSessions?: boolean;
+  /** Operator-only setting: host delegates authorization to the trusted MCP client. */
+  writeApprovalMode?: WriteApprovalMode;
   knowledgeRegistry?: KnowledgeRegistry;
   knowledgeWriteTools?: ReadonlySet<string>;
   /** Trusted embedding only. The standalone HTTP entry point supplies no approval provider. */
@@ -37,6 +39,7 @@ export function loadHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig
     authToken: env.MCP_AUTH_TOKEN,
     writeTools: parseWriteTools(env.PLYTIX_WRITE_TOOLS),
     approvalSessions: env.MCP_APPROVAL_SESSIONS === 'true',
+    writeApprovalMode: parseWriteApprovalMode(env.MCP_WRITE_APPROVAL_MODE),
     knowledgeRegistry: env.MCP_KNOWLEDGE_CONFIG ? new KnowledgeRegistry(env.MCP_KNOWLEDGE_CONFIG) : undefined,
     knowledgeWriteTools: parseKnowledgeWriteTools(env.MCP_KNOWLEDGE_WRITE_TOOLS),
   };
@@ -60,10 +63,12 @@ function hasDuplicateSecurityHeaders(req: Request): boolean {
 export function createHttpApp(input: HttpConfig) {
   // Snapshot operator policy so later mutation of input sets cannot broaden access.
   const config = { ...input, writeTools: new Set(input.writeTools),
+    writeApprovalMode: parseWriteApprovalMode(input.writeApprovalMode),
     knowledgeWriteTools: new Set(input.knowledgeWriteTools),
     allowedHosts: input.allowedHosts.map(host => host.toLowerCase()), allowedOrigins: [...input.allowedOrigins] };
   parseWriteTools(JSON.stringify([...config.writeTools]));
   parseKnowledgeWriteTools(JSON.stringify([...config.knowledgeWriteTools]));
+  if (config.writeApprovalMode === 'host' && config.requestWriteApproval) throw new Error('Host write mode cannot be combined with a custom approval provider');
   const loopback = ['127.0.0.1', '::1', 'localhost'].includes(config.host);
   if ((!loopback || config.approvalSessions || config.writeTools.size > 0 || config.knowledgeWriteTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
     throw new Error('Remote access or write tools require MCP_AUTH_TOKEN of at least 32 characters');
@@ -138,6 +143,7 @@ export function createHttpApp(input: HttpConfig) {
     const client = new PlytixClient({ apiKey, apiPassword, allowWrites: config.writeTools.size > 0, writeTools: config.writeTools });
     res.locals.plytixClient = client;
     const server = createServer(client, config.writeTools, {
+      writeApprovalMode: config.writeApprovalMode,
       knowledgeRegistry: config.knowledgeRegistry,
       knowledgeWriteTools: config.knowledgeWriteTools,
       requestWriteApproval: config.requestWriteApproval
