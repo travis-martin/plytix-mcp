@@ -38,10 +38,15 @@ The desktop plugin installer returned Windows access-denied errors activating
 the cache; the installed plugin registry still reported v0.8.0. Prepared-package
 verification does not establish activation in an existing desktop chat.
 
-Remote v0.9.0 deployment, hosted readback and live catalog mutation are not
-claimed here; deployment needs separate exact action-time approval. Earlier
-release evidence below is historical and does not establish that the remote
-service is running v0.9.0.
+After exact approval, remote revision `plytix-mcp-00005-vxd` was deployed with
+the tested image and serves 100% of traffic. Readback verified the approved
+pricing workspace binding and guidance-save allowlist addition while preserving
+IAM, resource limits, authentication, host mode and all other environment values.
+A fresh authenticated remote MCP client verified v0.9.0, 75 tools, 24 enabled
+writes, the GCS organization scope, and saved guidance/dictionary reads. The
+native remote connection also returned the updated discovery/storage guidance
+and host approval mode. These checks made no catalog mutations. Private
+initialization payloads and deployment snapshots remain outside source control.
 
 Older binaries do not enforce workflow guidance or organization bindings. After
 activation, use a compatible writer or disable pricing writes before rolling back
