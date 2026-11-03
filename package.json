@@ -43,6 +43,7 @@
     "node": ">=22"
   },
   "dependencies": {
+    "@google-cloud/storage": "8.4.0",
     "@modelcontextprotocol/ext-apps": "^2.0.4",
     "@modelcontextprotocol/sdk": "^1.32.2",
     "dotenv": "^16.4.5",

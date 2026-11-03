@@ -47,9 +47,14 @@ export const changeSchema = z.object({
   attribute: label, old_value: z.number().finite(), new_value: z.number().finite(),
   currency: z.string(), unit: z.string(), rule_id: label, source_ref: z.string(),
   inheritance_level: z.string(), evidence_digest: z.string(),
-  descendant_impact: z.array(z.object({ product_id: text, sku: z.string(), old_value: z.number().finite(), new_value: z.number().finite(), overridden: z.boolean(), evidence_digest: z.string() }).strict()).max(10),
+  review_evidence: z.record(z.string(), z.unknown()),
+  descendant_impact: z.array(z.object({ product_id: text, sku: z.string(), old_value: z.number().finite(), new_value: z.number().finite(), overridden: z.boolean(), evidence_digest: z.string(), review_evidence: z.record(z.string(), z.unknown()) }).strict()).max(10),
 }).strict();
 export type PricingChange = z.infer<typeof changeSchema>;
 export const applyInput = z.object({ plan_id: z.string().uuid(), digest: z.string().regex(/^[a-f0-9]{64}$/), changes: z.array(changeSchema).min(1).max(20) }).strict();
 export const rulesInput = z.object({ expected_revision: z.number().int().nonnegative(), rules: z.array(ruleSchema).max(100) }).strict();
-export const rulesDocument = z.object({ revision: z.number().int().nonnegative(), updated_at: z.string(), rules: z.array(ruleSchema).max(100) }).strict();
+export const rulesDocument = z.object({
+  revision: z.number().int().nonnegative(), updated_at: z.string(), rules: z.array(ruleSchema).max(100),
+  // History is atomically stored with the current rules; archive copies are extra.
+  history: z.array(z.object({ revision: z.number().int().nonnegative(), updated_at: z.string(), rules: z.array(ruleSchema).max(100) }).strict()).max(1000).default([]),
+}).strict();

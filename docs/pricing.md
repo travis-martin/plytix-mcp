@@ -93,11 +93,30 @@ never accept a directory or tenant ID. Keep the directory outside source control
 It contains reviewable `rules.json`, immutable `rules-revision-N.json` snapshots,
 source snapshots, plans and per-change execution results. Plans preserve the rule
 and source snapshots used for review. Back up the directory and protect it with
-host ACLs. Different credentials do not automatically share rules. This backend
-does not support distributed/cloud ephemeral storage; a durable transactional
-backend is required before horizontal sharing.
+host ACLs. Different credentials do not automatically share rules. The file
+backend does not support distributed or ephemeral cloud filesystem storage.
 
-Default connections advertise import/preview/read tools only. Their local file
+For cloud hosting, set `PLYTIX_PRICING_GCS_BUCKET` to an existing approved private
+Google Cloud Storage bucket. That setting takes precedence over the local directory
+and fails closed on errors; it never silently falls back to ephemeral files.
+Objects use `pricing/<credential-fingerprint>/<name>.json`. Reads pin the object
+generation, and updates use `ifGenerationMatch` compare-and-swap. Reservations
+therefore remain one-shot across concurrent instances and restarts. Conflicts are
+retried at most five times by rereading and revalidating the state; product
+mutations themselves are never retried. All objects are limited to 8 MiB.
+Current rules and prior rule revisions are saved atomically together in `rules.json`;
+extra immutable `rules-revision-N.json` copies are for convenient inspection.
+
+The runtime uses Google Application Default Credentials, with no downloaded keys
+or credentials in plugin files. Provisioning the bucket, its retention/versioning,
+and resource-scoped runtime permissions requires separate action-time approval.
+The runtime needs object get/create/update capabilities only for its approved
+storage scope; this implementation does not create buckets or change IAM.
+Local and remote connections may point to the same approved bucket to share the
+same credential-bound rules and plans. Different credentials remain isolated.
+Deployment and actual cloud storage access must be verified separately from mocks.
+
+Default connections advertise import/preview/read tools only. Their storage
 writes save private drafts; they cannot mutate Plytix. To enable reviewed rules
 and execution use an explicit `PLYTIX_WRITE_TOOLS` list containing only the needed
 `pricing_rules_save` and/or `pricing_apply`. Do not enable them automatically.

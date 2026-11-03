@@ -60,6 +60,7 @@ describe('pricing workflow', () => {
     const plan = await f.service.plan(f.input);
     expect(plan.blocked).toEqual([]);
     expect(plan.changes[0]).toMatchObject({ old_value: 10, new_value: 11.25, inheritance_level: 'parent_level' });
+    expect(plan.changes[0].review_evidence).toEqual({ brand: 'Acme' });
     const result = await f.service.apply({ plan_id: plan.plan_id, digest: plan.digest, changes: plan.changes });
     expect(result.state).toBe('complete'); expect(result.results[0].status).toBe('verified');
     await expect(f.service.apply({ plan_id: plan.plan_id, digest: plan.digest, changes: plan.changes })).rejects.toThrow('consumed');
@@ -157,7 +158,7 @@ describe('pricing workflow', () => {
     const plan = await f.service.plan(f.input);
     expect(plan.blocked).toEqual([]);
     expect(plan.changes[0].descendant_impact).toMatchObject([
-      { product_id: 'c1', old_value: 10, new_value: 11.25, overridden: false },
+      { product_id: 'c1', old_value: 10, new_value: 11.25, overridden: false, review_evidence: { brand: 'Acme' } },
       { product_id: 'c2', old_value: 12, new_value: 12, overridden: true },
     ]);
     const result = await f.service.apply({ plan_id: plan.plan_id, digest: plan.digest, changes: plan.changes });

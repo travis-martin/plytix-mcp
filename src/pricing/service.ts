@@ -1,9 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { join, resolve } from 'node:path';
 import { z } from 'zod';
 import type { PlytixClient } from '../client.js';
 import { PlytixError, type PlytixProduct } from '../types.js';
-import { readBoundedJson, updateJsonFile } from '../knowledge/store.js';
+import { createPricingStore, type PricingStore } from './store.js';
 import { applyInput, changeSchema, importInput, planInput, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
 import { calculate, parseCsv, withinChangeLimit } from './calculate.js';
 
@@ -36,29 +35,21 @@ function canonicalName(value: string, aliases: PricingRule['associations'][numbe
 }
 
 export class PricingService {
-  constructor(private client: PlytixClient, private root = process.env.PLYTIX_PRICING_DIR) {}
+  constructor(private client: PlytixClient, private root = process.env.PLYTIX_PRICING_DIR,
+    private storeFactory: (fingerprint: string, root?: string) => PricingStore = createPricingStore) {}
   private async directory() {
-    if (!this.root) fail('Pricing storage is not configured; set PLYTIX_PRICING_DIR to a private durable local volume');
     await this.client.verifyKnowledgeAccess();
-    return join(resolve(this.root!), this.client.knowledgeFingerprint());
+    return this.storeFactory(this.client.knowledgeFingerprint(), this.root);
   }
-  private async readRules(directory: string) {
-    try { return rulesDocument.parse(await readBoundedJson(join(directory, 'rules.json'))); }
-    catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { revision: 0, updated_at: '', rules: [] };
-      return fail('Pricing rules could not be read or validated');
-    }
+  private parseRules(value: unknown | undefined) {
+    try { return rulesDocument.parse(value ?? { revision: 0, updated_at: '', rules: [] }); }
+    catch { return fail('Pricing rules could not be read or validated'); }
   }
-  private async put(directory: string, id: string, value: unknown) {
-    await updateJsonFile(join(directory, `${id}.json`), async () => {
-      try { await readBoundedJson(join(directory, `${id}.json`)); fail('Pricing document already exists'); }
-      catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
-      return value;
-    }, current => current);
-  }
+  private async readRules(directory: PricingStore) { return this.parseRules(await directory.read('rules.json')); }
+  private async put(directory: PricingStore, id: string, value: unknown) { await directory.create(`${id}.json`, value); }
   async rulesGet() {
     const directory = await this.directory();
-    return { ...await this.readRules(directory), storage: 'Private credential-bound rules.json', sharing: 'Connections with different credentials have separate pricing files. Rules never authorize writes.' };
+    return { ...await this.readRules(directory), storage: directory.kind, sharing: 'Connections with different credentials have separate pricing files. Rules never authorize writes.' };
   }
   async rulesSave(input: z.infer<typeof rulesInput>) {
     input = rulesInput.parse(input);
@@ -72,12 +63,14 @@ export class PricingService {
       }
     }
     const directory = await this.directory();
-    const next = await updateJsonFile(join(directory, 'rules.json'), () => this.readRules(directory), previous => {
+    const next = await directory.update('rules.json', value => this.parseRules(value), previous => {
       if (previous.revision !== input.expected_revision) fail('Pricing rules changed; review the latest revision');
-      return rulesDocument.parse({ revision: previous.revision + 1, updated_at: new Date().toISOString(), rules: input.rules });
+      return rulesDocument.parse({ revision: previous.revision + 1, updated_at: new Date().toISOString(), rules: input.rules,
+        history: [...previous.history, ...(previous.revision ? [{ revision: previous.revision, updated_at: previous.updated_at, rules: previous.rules }] : [])] });
     });
     // The immutable revision copy preserves reviewed rules for later audits.
-    await this.put(directory, `rules-revision-${next.revision}`, next);
+    try { await this.put(directory, `rules-revision-${next.revision}`, next); }
+    catch { return { ...next, partial: true, warning: 'Rules and history were saved atomically, but the extra immutable revision copy is unavailable. Review rules.json before retrying.' }; }
     return next;
   }
   async importDocument(input: z.infer<typeof importInput>) {
@@ -183,14 +176,14 @@ export class PricingService {
           const included = (typeof observed === 'string' || typeof observed === 'number') && condition.values.includes(String(observed));
           if ((typeof observed !== 'string' && typeof observed !== 'number') || (condition.operator === 'not_equals' ? included : !included)) fail('Descendant restriction is not satisfied');
         }
-        descendantImpact.push({ product_id: child.id, sku: child.sku ?? '', old_value: childValue, new_value: overridden ? childValue : newValue, overridden, evidence_digest: digest({ parent: child._parent_id, family: child.product_family_id, overrides: child.overwritten_attributes, evidence: childEvidence }) });
+        descendantImpact.push({ product_id: child.id, sku: child.sku ?? '', old_value: childValue, new_value: overridden ? childValue : newValue, overridden, review_evidence: childEvidence, evidence_digest: digest({ parent: child._parent_id, family: child.product_family_id, overrides: child.overwritten_attributes, evidence: childEvidence }) });
       }
       descendantImpact.sort((a, b) => a.product_id.localeCompare(b.product_id));
     }
-    return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue, currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
+    return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue, currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence, evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };
   }
-  private async build(input: z.infer<typeof planInput>, directory: string) {
-    const document = docSchema.parse(await readBoundedJson(join(directory, `${input.import_id}.json`)));
+  private async build(input: z.infer<typeof planInput>, directory: PricingStore) {
+    const document = docSchema.parse(await directory.read(`${input.import_id}.json`));
     const rules = await this.readRules(directory);
     const selected = input.rule_ids.map(id => rules.rules.find(rule => rule.id === id && rule.status === 'confirmed') ?? fail('Only current confirmed pricing rules may calculate an update'));
     if (input.mappings.length * selected.length > 20 || new Set(input.rule_ids).size !== input.rule_ids.length) fail('A plan supports at most 20 unique product/attribute changes');
@@ -219,18 +212,18 @@ export class PricingService {
   async planGet(planId: string) {
     z.string().uuid().parse(planId);
     const directory = await this.directory();
-    return storedPlan.parse(await readBoundedJson(join(directory, `${planId}.json`)));
+    return storedPlan.parse(await directory.read(`${planId}.json`));
   }
   async apply(input: z.infer<typeof applyInput>) {
     input = applyInput.parse(input);
     const directory = await this.directory();
-    const path = join(directory, `${input.plan_id}.json`);
+    const key = `${input.plan_id}.json`;
     // Reserve durably before any product write. A crash requires review, never replay.
-    const plan = await updateJsonFile(path, async () => storedPlan.parse(await readBoundedJson(path)), current => {
+    const plan = await directory.update(key, value => storedPlan.parse(value), current => {
       if (current.state !== 'draft' || current.blocked.length || current.digest !== input.digest || canonical(current.changes) !== canonical(input.changes) || Date.parse(current.expires_at) <= Date.now()) fail('Pricing plan is blocked, expired, altered or already consumed; create a new reviewed plan');
       current.state = 'executing'; return current;
     });
-    const persist = async () => updateJsonFile(path, async () => storedPlan.parse(await readBoundedJson(path)), () => plan);
+    const persist = async () => directory.update(key, value => storedPlan.parse(value), () => plan);
     try {
       const fresh = await this.build(plan.input, directory);
       if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');

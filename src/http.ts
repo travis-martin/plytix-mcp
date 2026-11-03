@@ -7,6 +7,7 @@ import { createServer } from './server.js';
 import { parseWriteTools, parseKnowledgeWriteTools } from './policy.js';
 import type { WriteApprovalProvider } from './tools/register.js';
 import { KnowledgeRegistry } from './knowledge/registry.js';
+import { registerApprovalSessions } from './http-sessions.js';
 
 export interface HttpConfig {
   host: string;
@@ -16,6 +17,8 @@ export interface HttpConfig {
   writeTools: ReadonlySet<string>;
   requestsPerMinute?: number;
   maxConcurrentRequests?: number;
+  /** Opt-in trusted-host form elicitation; private authenticated clients only. */
+  approvalSessions?: boolean;
   knowledgeRegistry?: KnowledgeRegistry;
   knowledgeWriteTools?: ReadonlySet<string>;
   /** Trusted embedding only. The standalone HTTP entry point supplies no approval provider. */
@@ -33,6 +36,7 @@ export function loadHttpConfig(env: NodeJS.ProcessEnv = process.env): HttpConfig
     allowedOrigins: (env.MCP_ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean),
     authToken: env.MCP_AUTH_TOKEN,
     writeTools: parseWriteTools(env.PLYTIX_WRITE_TOOLS),
+    approvalSessions: env.MCP_APPROVAL_SESSIONS === 'true',
     knowledgeRegistry: env.MCP_KNOWLEDGE_CONFIG ? new KnowledgeRegistry(env.MCP_KNOWLEDGE_CONFIG) : undefined,
     knowledgeWriteTools: parseKnowledgeWriteTools(env.MCP_KNOWLEDGE_WRITE_TOOLS),
   };
@@ -61,7 +65,7 @@ export function createHttpApp(input: HttpConfig) {
   parseWriteTools(JSON.stringify([...config.writeTools]));
   parseKnowledgeWriteTools(JSON.stringify([...config.knowledgeWriteTools]));
   const loopback = ['127.0.0.1', '::1', 'localhost'].includes(config.host);
-  if ((!loopback || config.writeTools.size > 0 || config.knowledgeWriteTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
+  if ((!loopback || config.approvalSessions || config.writeTools.size > 0 || config.knowledgeWriteTools.size > 0) && (!config.authToken || config.authToken.length < 32)) {
     throw new Error('Remote access or write tools require MCP_AUTH_TOKEN of at least 32 characters');
   }
   if (!config.allowedHosts.length || config.allowedHosts.some(host =>
@@ -93,8 +97,9 @@ export function createHttpApp(input: HttpConfig) {
     if (origin) {
       res.setHeader('Access-Control-Allow-Origin', origin);
       res.setHeader('Vary', 'Origin');
-      res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Protocol-Version, X-MCP-Token, X-Plytix-API-Key, X-Plytix-API-Password');
+      res.setHeader('Access-Control-Allow-Methods', config.approvalSessions ? 'POST, GET, DELETE, OPTIONS' : 'POST, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, MCP-Protocol-Version, MCP-Session-Id, X-MCP-Token, X-Plytix-API-Key, X-Plytix-API-Password');
+      res.setHeader('Access-Control-Expose-Headers', 'MCP-Session-Id');
     }
     if (req.path === '/health' && req.method === 'GET') { res.json({ status: 'ok' }); return; }
     if (req.path !== '/mcp') { res.sendStatus(404); return; }
@@ -103,12 +108,13 @@ export function createHttpApp(input: HttpConfig) {
     if (config.authToken && !timingSafeEqual(digest(req.get('x-mcp-token') ?? ''), digest(config.authToken))) {
       res.sendStatus(401); return;
     }
-    if (req.headers['mcp-session-id']) { res.status(400).json({ error: 'Sessions are not supported' }); return; }
-    if (req.method !== 'POST') { res.setHeader('Allow', 'POST, OPTIONS'); res.sendStatus(405); return; }
+    if (!config.approvalSessions && req.headers['mcp-session-id']) { res.status(400).json({ error: 'Sessions are not supported' }); return; }
+    if (!(config.approvalSessions ? ['POST', 'GET', 'DELETE'] : ['POST']).includes(req.method)) { res.setHeader('Allow', config.approvalSessions ? 'POST, GET, DELETE, OPTIONS' : 'POST, OPTIONS'); res.sendStatus(405); return; }
     if (Date.now() - windowStart >= 60_000) { count = 0; windowStart = Date.now(); }
-    if (++count > (config.requestsPerMinute ?? 60) || active >= (config.maxConcurrentRequests ?? 4)) {
+    if (++count > (config.requestsPerMinute ?? 60) || (!config.approvalSessions && active >= (config.maxConcurrentRequests ?? 4))) {
       res.setHeader('Retry-After', '60'); res.sendStatus(429); return;
     }
+    if (config.approvalSessions) { next(); return; }
     active++;
     res.once('close', () => {
       const client = res.locals.plytixClient as PlytixClient | undefined;
@@ -119,6 +125,8 @@ export function createHttpApp(input: HttpConfig) {
     next();
   });
   app.use(express.json({ limit: '256kb', strict: true }));
+  if (config.approvalSessions) registerApprovalSessions(app, config);
+  else {
   app.post('/mcp', async (req, res) => {
     if (Array.isArray(req.body)) { res.status(400).json({ error: 'Batch requests are not supported' }); return; }
     const apiKey = req.get('x-plytix-api-key') ?? '';
@@ -145,6 +153,7 @@ export function createHttpApp(input: HttpConfig) {
       if (!res.headersSent) res.status(500).json({ error: 'MCP request failed' });
     }
   });
+  }
   const errorHandler: ErrorRequestHandler = (error, _req, res, _next) => {
     const status = error?.type === 'entity.too.large' ? 413 : 400;
     if (!res.headersSent) res.status(status).json({ error: 'Invalid request body' });
