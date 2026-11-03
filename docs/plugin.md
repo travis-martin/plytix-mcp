@@ -47,11 +47,12 @@ Each write still requires the complete trusted host approval form. The portable
 archive keeps its default product-write-disabled configuration.
 
 For an explicitly authorized private operator installation, pass
-`npm run plugin:prepare-local -- --host-writes --all-write-tools` to use native
+`node scripts/plugin-prepare-local.mjs --host-writes --all-write-tools` to use native
 host tool permissions with all named catalog writes. Omit `--all-write-tools`
 to retain just the three pricing writes. Omit `--host-writes` to retain the
 additional server form. Neither flag changes the portable package defaults.
-Host mode relies on the client's permission policy; keep it set to prompt.
+Host mode relies on the client's permission policy; use `writes` to prompt for
+writes while allowing read-only tools, or `prompt` to ask for every tool.
 
 Install that prepared private source with the supported local CLI:
 

@@ -6,7 +6,7 @@
 [mcp_servers.plytix_remote]
 url = "https://VERIFIED-CLOUD-RUN-HOST/mcp"
 enabled = false
-default_tools_approval_mode = "prompt"
+default_tools_approval_mode = "writes"
 startup_timeout_sec = 30
 tool_timeout_sec = 120
 http_headers_helper = 'node "C:/ABSOLUTE/PATH/plytix-mcp/scripts/cloud-run-headers.mjs" --env-file "C:/PRIVATE/PATH/.env" --account "operator@example.com" --gcloud "C:/ABSOLUTE/PATH/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd"'

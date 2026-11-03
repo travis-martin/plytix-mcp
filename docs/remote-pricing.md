@@ -4,7 +4,8 @@ For a trusted private operator, `MCP_WRITE_APPROVAL_MODE=host` uses Codex's norm
 tool permissions and removes the duplicate server form. Only named tools in
 `PLYTIX_WRITE_TOOLS` become available. This mode works with or without sessions;
 the existing private pricing deployment can retain its sessions. Keep native
-client tool permissions set to prompt. The server delegates approval to that
+client tool permissions set to `writes` to prompt for writes but not reads, or
+`prompt` to ask for every tool. The server delegates approval to that
 client; it cannot prove that a human saw a prompt. Direct authenticated clients
 can invoke enabled writes, so do not use this mode for an untrusted/public gateway.
 Default `form` mode retains the additional form behavior described below.

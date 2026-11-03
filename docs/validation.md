@@ -1,5 +1,24 @@
 # Validation
 
+## Version 0.7.1 — November 3, 2026
+
+- Typecheck/build and 305 fixture tests pass. Sixteen new tests cover explicit host
+  authorization, default form enforcement, authentication, route/tool restrictions,
+  cancellation and rule persistence through both HTTP modes without elicitation.
+- Portable archive checks pass with read-only defaults; private installed local
+  plugin and remote service each expose 71 tools including 23 catalog writes.
+- Explicitly approved remote activation uses host authorization. Fresh SDK reads
+  and native Codex `server_capabilities` confirm mode `host` and no nested form.
+- Current credentials pass bounded reads. No live product writes or rule changes
+  were used as tests, so upstream API-key write privileges remain unverified.
+- Both branch CI and release publication passed for implementation commit 5e92001.
+  Private deployment readback confirms the approved image and settings. Native
+  client policy uses `writes` to keep write prompts while allowing read-only tools.
+
+The server delegates human authorization to the trusted host in this opt-in mode;
+diagnostics do not claim to have verified a human prompt. API authentication,
+explicit tool/route limits, pricing plan checks, reservation and readback remain.
+
 ## Version 0.7.0 — November 3, 2026
 
 | Check | Result |

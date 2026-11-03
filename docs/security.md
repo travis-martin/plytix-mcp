@@ -12,7 +12,7 @@ The form-specific guarantees below apply to form mode only.
 Host mode delegates authorization: the server cannot verify that the host showed
 a human prompt. Any authenticated direct client holding the service and Plytix
 credentials can invoke enabled write tools in this mode. Use it only for private
-operator connections, with host tool permissions set to prompt and user authority
+operator connections, with host tool permissions set to `writes` (or `prompt`) and user authority
 for the requested action. It is not a public multi-user mode. The host's own
 approval, denial and cancellation controls are not changed.
 
