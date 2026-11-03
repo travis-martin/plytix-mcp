@@ -43,8 +43,8 @@ portable package. Its private `mcp.json` references the existing `.env` by absol
 path, uses `.local/pricing` for durable local records, and explicitly exposes only
 `pricing_rules_save`, `pricing_apply` and `pricing_review_apply` as approved writes. It never copies or
 prints credentials, edits the existing direct MCP connection, or installs itself.
-Each write still requires the complete trusted host approval form. The portable
-archive keeps its default product-write-disabled configuration.
+The default private preparation uses the additional trusted host approval form.
+The portable archive keeps its default product-write-disabled configuration.
 
 For an explicitly authorized private operator installation, pass
 `node scripts/plugin-prepare-local.mjs --host-writes --all-write-tools` to use native
@@ -53,6 +53,19 @@ to retain just the three pricing writes. Omit `--host-writes` to retain the
 additional server form. Neither flag changes the portable package defaults.
 Host mode relies on the client's permission policy; use `writes` to prompt for
 writes while allowing read-only tools, or `prompt` to ask for every tool.
+
+When the remote connection is primary, prepare a clearly labeled local fallback:
+
+```powershell
+node scripts/plugin-prepare-local.mjs --host-writes --all-write-tools --local-backup
+```
+
+`--local-backup` labels only the private prepared package **Plytix Catalog (Local
+Backup)** and adds `+local-backup.1` to its source version for host cache refresh.
+The plugin name `plytix-catalog`, marketplace identity, portable package and server
+behavior remain unchanged. Omit the flag and prepare again to restore the portable
+display name/version, then use the supported host reload/reinstall flow. The label
+does not select a connection automatically or synchronize local and remote data.
 
 Install that prepared private source with the supported local CLI:
 
@@ -74,11 +87,13 @@ do not substitute a dashboard URL or include credentials in an archive.
 
 The HTTP service requires independent service authentication and Plytix credentials
 on each request. Its default stateless mode has no interactive write approval.
-Opt-in `MCP_APPROVAL_SESSIONS=true` supplies credential-bound sessions with exact
-form elicitation for a trusted compatible host. Real host authentication/approval
-compatibility still needs verification; SDK fixture roundtrips alone do not prove
-it. Keep deployment, credentials, permissions and publishing under their existing
-approval requirements. See the repository's `docs/remote-pricing.md`.
+Opt-in `MCP_APPROVAL_SESSIONS=true` supplies credential-bound sessions. The default
+form mode requires exact form elicitation from a trusted compatible host;
+`MCP_WRITE_APPROVAL_MODE=host` uses that client's normal tool permissions without
+the duplicate form. Verify authentication and the configured approval behavior in
+the actual host; fixture roundtrips alone do not prove compatibility. Keep
+deployment, credentials, permissions and publishing under their existing approval
+requirements. See the repository's `docs/remote-pricing.md`.
 
 ## Pricing workflow
 
@@ -90,9 +105,13 @@ rules and current inheritance/value evidence. Review exact old/new values and
 calculation traces before execution. Read back applied changes and distinguish
 verified from uncertain outcomes. See `skills/update-prices/SKILL.md` in the package.
 
-Rules and run records are private files under configured `PLYTIX_PRICING_DIR`,
-scoped to the credential fingerprint. Remote instances can use the explicit
-`PLYTIX_PRICING_GCS_BUCKET` durable JSON object adapter with generation checks;
-separate local copies are not automatically synchronized. Learned associations
-and exceptions require review and explicit scope before future reuse. The package
-ships workflow guidance, never organization-specific rules or data.
+Pricing records use persistent `PLYTIX_PRICING_DIR` files or the explicit
+`PLYTIX_PRICING_GCS_BUCKET` object adapter with generation checks. Without workspace
+bindings, all records are credential-private. Explicit
+`PLYTIX_PRICING_SCOPE_BINDINGS` can share workflow guidance, rules and dictionary
+definitions among bound credentials using the same backend; imports, plans,
+reviews and execution audits remain credential-private. Local file copies and
+remote cloud objects do not synchronize automatically, even with the same
+workspace binding. Before switching backends, review and transfer the latest
+guidance and required records rather than relying on an older local copy. The
+portable package ships workflow skills, never organization-specific rules or data.

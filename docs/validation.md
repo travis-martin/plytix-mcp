@@ -34,9 +34,15 @@ smoke testing and image publication. The immutable tested image digest is
 A fresh client against the prepared private local package verified v0.9.0,
 75 tools, 24 enabled writes, host mode, organization scope and saved guidance/
 dictionary reads using current credentials. It made no catalog mutations.
-The desktop plugin installer returned Windows access-denied errors activating
-the cache; the installed plugin registry still reported v0.8.0. Prepared-package
-verification does not establish activation in an existing desktop chat.
+The initial desktop plugin installer returned Windows access-denied errors
+activating the original cache path. During the subsequent connection cleanup,
+the supported installer successfully activated private package
+`0.9.0+local-backup.1`, displayed as **Plytix Catalog (Local Backup)**. Its runtime
+is the unchanged v0.9.0 server; a fresh client verified all 75 tools, host mode
+and saved local guidance/dictionary reads. The local plugin is installed but
+disabled while the remote connection is primary. The redundant read-only
+development connection was backed up and removed; source, data and versioned
+archives remain intact.
 
 After exact approval, remote revision `plytix-mcp-00005-vxd` was deployed with
 the tested image and serves 100% of traffic. Readback verified the approved

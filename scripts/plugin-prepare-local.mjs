@@ -6,8 +6,9 @@ import { validatePlugin } from './plugin-check.mjs';
 import { WRITE_TOOLS } from '../dist/policy.js';
 
 const args = process.argv.slice(2);
-if (args.some(arg => !['--host-writes', '--all-write-tools'].includes(arg))) throw new Error('Unknown private preparation option');
+if (args.some(arg => !['--host-writes', '--all-write-tools', '--local-backup'].includes(arg))) throw new Error('Unknown private preparation option');
 const hostWrites = args.includes('--host-writes');
+const localBackup = args.includes('--local-backup');
 const writes = args.includes('--all-write-tools') ? [...WRITE_TOOLS] : ['pricing_rules_save', 'pricing_apply', 'pricing_review_apply'];
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -25,6 +26,18 @@ for (const path of [marketplace, join(marketplace, 'plugins'), target]) {
 await mkdir(join(marketplace, '.agents/plugins'), { recursive: true });
 await rm(target, { recursive: true, force: true });
 await cp(source, target, { recursive: true });
+const manifest = JSON.parse(await readFile(join(target, 'plugin.json'), 'utf8'));
+if (localBackup) {
+  // Private presentation only: preserve the portable plugin identity and runtime.
+  manifest.version = `${manifest.version.split('+')[0]}+local-backup.1`;
+  manifest.description = 'Local fallback for Plytix catalog and pricing workflows on this PC. Uses local pricing files that are separate from remote storage.';
+  const presentation = manifest.extensions['com.openai'].interface;
+  presentation.displayName = 'Plytix Catalog (Local Backup)';
+  presentation.shortDescription = 'Local fallback on this PC';
+  presentation.longDescription = 'Run Plytix catalog and pricing workflows locally on this PC. Local pricing guidance, rules and review records are separate from remote storage and do not synchronize automatically. Use the remote connection for shared remote guidance.';
+  await writeFile(join(target, 'plugin.json'), JSON.stringify(manifest, null, 2) + '\n');
+  await validatePlugin(target);
+}
 const config = JSON.parse(await readFile(join(target, 'mcp.json'), 'utf8'));
 config.mcpServers['plytix-catalog'].env = {
   DOTENV_CONFIG_PATH: join(repo, '.env'),
@@ -36,6 +49,7 @@ await writeFile(join(target, 'mcp.json'), JSON.stringify(config, null, 2) + '\n'
 await cp(join(repo, 'plugin/marketplace.json'), join(marketplace, '.agents/plugins/marketplace.json'));
 console.log(JSON.stringify({
   marketplace, plugin: target, credentials: 'Original .env referenced by path only; no values copied',
+  display_name: manifest.extensions['com.openai'].interface.displayName, version: manifest.version,
   writes, approval: hostWrites ? 'Trusted host tool permissions; no duplicate form' : 'Exact-action host form required for every write',
   next_commands: [`codex plugin marketplace add "${marketplace}" --json`, 'codex plugin add plytix-catalog@plytix-local --json'],
 }));
