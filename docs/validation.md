@@ -1,5 +1,33 @@
 # Validation
 
+## Version 0.6.0 — November 3, 2026
+
+| Check | Result |
+| --- | --- |
+| Typecheck / build / fixture tests | Pass; 214 tests across 25 files on Windows |
+| Lookup contracts | Ambiguous first candidate retained; failed detail hydration returns explicit partial provenance |
+| Pricing workflow | CSV/extracted rows, family mapping, decimal calculations, restrictions, inheritance impact, exact approval, stale/replay guards and readback tested with fixtures |
+| Durable storage | File locking and GCS generation-pinned reads/CAS writes tested with mocks; actual cloud access requires deployment verification |
+| Approval sessions | SDK HTTP roundtrips cover approve/decline/unsupported clients, credential isolation, cancellation, shutdown and draining capacity |
+| Interactive workspace | Fixture-host browser checks cover search/selection, inheritance, dictionary, price import/mapping/plan and context attachment; desktop and narrow viewport checked |
+| Portable plugin | Archive inspection and isolated no-network runtime checks pass; 42 default tools and UI resource available |
+| Installed local plugin | Fresh-process discovery and bounded existing-account reads pass; no product writes |
+| Container | Node 24, non-root, 0.25 CPU / 256 MiB fixture smoke passed; authenticated SDK handshake and blocked catalog mutation verified |
+| Remote header helper | Sixteen fixture checks cover configuration, private header output, safe errors, subprocess bounds and Windows launchers |
+| CI / image publication | Node 22/24 validation and image publication passed for 30f3bf; clean runner now builds host modules before container smoke |
+| Live price updates / initial cloud deployment | Not performed; require exact action approval |
+
+The pricing HTTP mode has a separate deployment template with one CPU, 512 MiB,
+concurrency 16 and a 120-second timeout so persistent event streams do not starve
+approval responses. The constrained container check above verifies the default
+stateless mode. Fixture approval roundtrips do not prove actual desktop form UI
+support. No real price list, confirmed business rules, or catalog mutations were
+used for release testing. PDF/XLSX extraction remains the host's responsibility.
+
+The installed plugin requires host refresh/new-task discovery before its tools
+appear in an already-open chat. Local and remote handlers share source, but their
+private file stores do not synchronize automatically.
+
 ## Version 0.5.0 — October 20, 2026
 
 | Check | Result |

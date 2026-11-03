@@ -1,0 +1,63 @@
+# Opt-in private pricing deployment. Render to an ignored *.local.yaml only after
+# exact image/secret/bucket/runtime/IAM approval. This template creates nothing.
+# Verify actual service IAM separately; this file does not remove public bindings.
+apiVersion: serving.knative.dev/v1
+kind: Service
+metadata:
+  name: REPLACE_APPROVED_SERVICE_NAME
+  namespace: REPLACE_PROJECT_NUMBER
+  annotations:
+    run.googleapis.com/ingress: all
+    run.googleapis.com/invoker-iam-disabled: 'false'
+spec:
+  template:
+    metadata:
+      annotations:
+        autoscaling.knative.dev/minScale: '0'
+        autoscaling.knative.dev/maxScale: '1'
+        run.googleapis.com/execution-environment: gen1
+        run.googleapis.com/cpu-throttling: 'true'
+        run.googleapis.com/startup-cpu-boost: 'false'
+        run.googleapis.com/sessionAffinity: 'true'
+    spec:
+      serviceAccountName: REPLACE_APPROVED_RUNTIME_SERVICE_ACCOUNT
+      # Four app sessions can each hold an SSE stream plus a tool request and
+      # need another request for the approval response. Leave headroom for control.
+      containerConcurrency: 16
+      timeoutSeconds: 120
+      containers:
+        - image: REPLACE_APPROVED_IMAGE_AT_SHA256_DIGEST
+          ports:
+            - containerPort: 8080
+          resources:
+            limits:
+              cpu: '1'
+              memory: 512Mi
+          startupProbe:
+            tcpSocket:
+              port: 8080
+            periodSeconds: 10
+            timeoutSeconds: 1
+            failureThreshold: 24
+          env:
+            - name: HOST
+              value: 0.0.0.0
+            - name: MCP_ALLOWED_HOSTS
+              value: REPLACE_EXACT_SERVICE_HOSTNAME
+            - name: MCP_ALLOWED_ORIGINS
+              value: ''
+            - name: MCP_APPROVAL_SESSIONS
+              value: 'true'
+            - name: PLYTIX_WRITE_TOOLS
+              value: '["pricing_rules_save","pricing_apply"]'
+            - name: MCP_KNOWLEDGE_WRITE_TOOLS
+              value: '[]'
+            - name: PLYTIX_PRICING_GCS_BUCKET
+              value: REPLACE_APPROVED_PRIVATE_BUCKET
+            - name: PLYTIX_PRICING_DIR
+              value: ''
+            - name: MCP_AUTH_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: REPLACE_APPROVED_AUTH_SECRET_NAME
+                  key: REPLACE_PINNED_NUMERIC_VERSION

@@ -72,7 +72,10 @@ This is a usage assumption, not an observed or guaranteed bill.
 The small stateless template must not be used unchanged for interactive approval:
 concurrency one would prevent a form response from reaching a waiting tool call.
 For the implemented private pricing mode explicitly set `MCP_APPROVAL_SESSIONS=true`,
-at least four concurrent requests, one CPU, and a 120-second request timeout.
+sixteen concurrent requests for the default four app sessions, one CPU, 512 MiB
+memory, and a 120-second request timeout. Idle SSE streams must leave capacity
+for active tools and their separate approval responses. Use the separate
+[pricing template](../deploy/cloud-run-pricing.template.yaml).
 Keep minimum instances zero, initially maximum one, private IAM invocation,
 session affinity, exact Host validation, and no browser origins unless separately
 needed. Affinity is best effort: a lost session fails closed and must reconnect.

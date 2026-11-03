@@ -120,10 +120,12 @@ Default connections advertise import/preview/read tools only. Their storage
 writes save private drafts; they cannot mutate Plytix. To enable reviewed rules
 and execution use an explicit `PLYTIX_WRITE_TOOLS` list containing only the needed
 `pricing_rules_save` and/or `pricing_apply`. Do not enable them automatically.
-Stdio needs a host supporting trusted form approval. Standalone HTTP has no
-approval provider and therefore cannot execute either write tool. A hosted UI
-button is not approval; integrate verified caller identity and a trusted approval
-provider before enabling hosted writes.
+Stdio needs a host supporting trusted form approval. Default stateless HTTP has
+no approval provider and cannot execute either write tool. Explicit
+`MCP_APPROVAL_SESSIONS=true` enables the same exact-argument form for private,
+credential-bound trusted MCP clients; unsupported hosts still fail closed.
+A hosted UI button is not approval. Public multi-user hosting still requires a
+separately reviewed identity/approval design. See [private remote pricing](remote-pricing.md).
 
 ## Conservative execution boundaries
 

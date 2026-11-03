@@ -200,8 +200,9 @@ None of those controls is implied by an HTTP header or an in-memory token cache.
 Keep public/shared hosted writes disabled until that integration is ready. Private
 trusted-host sessions must pass real client compatibility checks before enabling
 their write allowlist. The default 60-second Cloud Run template is for read-only
-stateless use. Approval sessions use at least four concurrent requests, one CPU,
-and a 120-second timeout; increasing a timeout alone does not enable approval.
+stateless use. With four application sessions, use sixteen platform concurrent
+requests, one CPU, 512 MiB memory and a 120-second timeout so idle SSE streams
+cannot starve approval/control traffic. Increasing a timeout alone does not enable approval.
 See [private remote pricing](remote-pricing.md).
 
 ## Durable pricing files

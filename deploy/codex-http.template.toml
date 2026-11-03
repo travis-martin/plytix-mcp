@@ -1,12 +1,14 @@
-# Template only; do not install/enable until the private service, local IAM proxy
-# and bounded read-only client test have been approved and verified.
-# Owner supplies credential values privately through the client's environment.
-[mcp_servers.plytix]
-url = "http://127.0.0.1:8085/mcp"
+# Template only. Replace verified HTTPS service URL and absolute private paths.
+# Native helper authenticates directly to private Cloud Run; no local proxy needed.
+# Use an existing approved developer gcloud account with service invocation access.
+# The helper emits credentials only to Codex's private pipe. Never run it manually
+# without --check, print its output, or add credential values to this template.
+[mcp_servers.plytix_remote]
+url = "https://VERIFIED-CLOUD-RUN-HOST/mcp"
 enabled = false
 default_tools_approval_mode = "prompt"
-
-[mcp_servers.plytix.env_http_headers]
-X-MCP-Token = "PLYTIX_MCP_AUTH_TOKEN"
-X-Plytix-API-Key = "PLYTIX_API_KEY"
-X-Plytix-API-Password = "PLYTIX_API_PASSWORD"
+startup_timeout_sec = 30
+tool_timeout_sec = 120
+http_headers_helper = 'node "C:/ABSOLUTE/PATH/plytix-mcp/scripts/cloud-run-headers.mjs" --env-file "C:/PRIVATE/PATH/.env" --account "operator@example.com" --gcloud "C:/ABSOLUTE/PATH/Google/Cloud SDK/google-cloud-sdk/bin/gcloud.cmd"'
+# Do not configure bearer_token_env_var or OAuth credentials for this connection:
+# explicit Authorization would override the helper's refreshed Google ID token.
