@@ -26,10 +26,22 @@ workspace only on the same backend, while imports, reviews, plans and execution
 records retain credential isolation. Local/browser checks use fixtures and do not
 establish upstream API write permissions or production throughput.
 
-This release is prepared locally. Remote v0.9.0 deployment, hosted readback and
-live catalog mutation are not claimed here; deployment needs separate exact
-action-time approval. Earlier release evidence below is historical and does not
-establish that the remote service is running v0.9.0.
+Implementation checkpoint `984bffb` was pushed to both branches. Both CI runs
+passed, and release run `41638808611` passed Node 22/24 validation, container
+smoke testing and image publication. The immutable tested image digest is
+`sha256:d5f3953b3a593a7b80e32ec793aaa1aefb042d2626bf0173c8ec8a1399e7af52`.
+
+A fresh client against the prepared private local package verified v0.9.0,
+75 tools, 24 enabled writes, host mode, organization scope and saved guidance/
+dictionary reads using current credentials. It made no catalog mutations.
+The desktop plugin installer returned Windows access-denied errors activating
+the cache; the installed plugin registry still reported v0.8.0. Prepared-package
+verification does not establish activation in an existing desktop chat.
+
+Remote v0.9.0 deployment, hosted readback and live catalog mutation are not
+claimed here; deployment needs separate exact action-time approval. Earlier
+release evidence below is historical and does not establish that the remote
+service is running v0.9.0.
 
 Older binaries do not enforce workflow guidance or organization bindings. After
 activation, use a compatible writer or disable pricing writes before rolling back
