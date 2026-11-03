@@ -101,15 +101,22 @@ describe('durable pricing review', () => {
       finally { activeWrites--; }
     });
     const selected = await f.reviewService.update({ review_id: f.review.review_id, expected_revision: f.review.revision, decisions: f.review.lines.map(line => ({ line_id: line.line_id, status: 'selected' })) });
-    const prepared = await f.reviewService.plan({ review_id: selected.review_id, expected_revision: selected.revision });
-    expect(prepared.approval!.arguments.changes).toHaveLength(26);
-    expect(prepared.approval!.arguments.changes.every(change => change.descendants.length === 10)).toBe(true);
-    expect(prepared.approval!.argument_characters).toBeLessThan(64_000);
-    expect(f.write).not.toHaveBeenCalled();
-    const applied = await f.reviewService.apply(prepared.approval!.arguments);
-    expect(applied.state).toBe('complete');
-    expect(applied.review.counts).toMatchObject({ verified: 26, awaiting_approval: 0 });
-    expect(applied.review.lines.every(line => line.execution?.status === 'verified')).toBe(true);
+    let current = selected, batches = 0;
+    while (current.counts.awaiting_approval) {
+      const prepared = await f.reviewService.plan({ review_id: current.review_id, expected_revision: current.revision });
+      expect(prepared.approval!.arguments.changes).toHaveLength(26);
+      expect(prepared.approval!.arguments.changes.every(change => change.descendants.length === 10)).toBe(true);
+      expect(prepared.approval!.argument_characters).toBeLessThan(64_000);
+      expect(prepared.batching.estimated_api_requests).toBeLessThanOrEqual(prepared.batching.max_estimated_api_requests);
+      expect(prepared.batching.estimated_api_requests).toBe(2 + 26 * (15 + 4 * 10 + 3));
+      if (!batches) expect(f.write).not.toHaveBeenCalled();
+      const applied = await f.reviewService.apply(prepared.approval!.arguments);
+      expect(applied.state).toBe('complete');
+      current = applied.review; batches++;
+    }
+    expect(batches).toBe(1);
+    expect(current.counts).toMatchObject({ verified: 26, awaiting_approval: 0 });
+    expect(current.lines.every(line => line.execution?.status === 'verified')).toBe(true);
     expect(f.write.mock.calls.map(([id]) => id)).toEqual(f.products.map(product => product.id));
     expect(f.products.every(product => product.attributes!.cost === 11.25)).toBe(true);
     for (const children of f.children.values()) expect(children.map(child => child.attributes!.cost)).toEqual([...Array<number>(9).fill(11.25), 12]);

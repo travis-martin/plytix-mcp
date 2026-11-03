@@ -11,7 +11,7 @@ export const WRITE_TOOLS = new Set([
 export const READ_TOOLS = new Set([
   'catalog_workspace',
   'approval_capabilities', 'approval_check',
-  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get',
+  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_dictionary_get',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',
@@ -26,7 +26,7 @@ export const READ_TOOLS = new Set([
 ]);
 
 // Default previews save private local drafts but never authorize Plytix mutations.
-export const LOCAL_DRAFT_TOOLS = new Set(['pricing_import', 'pricing_plan', 'pricing_review_create', 'pricing_review_update', 'pricing_review_plan']);
+export const LOCAL_DRAFT_TOOLS = new Set(['pricing_import', 'pricing_plan', 'pricing_review_create', 'pricing_review_update', 'pricing_review_plan', 'pricing_dictionary_update']);
 export const DEFAULT_TOOLS = new Set([...READ_TOOLS, ...LOCAL_DRAFT_TOOLS]);
 
 export const KNOWLEDGE_WRITE_TOOLS = new Set(['knowledge_propose']);

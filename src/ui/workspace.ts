@@ -9,6 +9,7 @@ const inheritanceLevel = (value: unknown): string => ({ parent_level: 'Parent', 
 let selection: Record<string, unknown> | null = null;
 let productId = '';
 let dictionaryPage = 1;
+let pricingDictionaryPage = 1;
 let imported: any = null;
 let busy = false;
 type ReviewStatus = 'pending' | 'selected' | 'rejected' | 'needs_revision' | 'blocked' | 'unchanged';
@@ -24,6 +25,8 @@ let preparedPlans: any[] = [];
 let preparedApproval: { tool_name: string; arguments: Record<string, unknown>; argument_characters?: number } | null = null;
 let preparedBlockReason: string | null = null;
 let preparedRevision: number | null = null;
+type PreparedBatch = { requested: number; prepared: number; deferred_count: number; deferred_line_ids: string[]; reasons: string[]; max_changes: number; estimated_api_requests: number; max_estimated_api_requests: number };
+let preparedBatch: PreparedBatch | null = null;
 const checkedLines = new Set<string>();
 let editingLines: string[] = [];
 const decisionLabels: Record<ReviewStatus, string> = { pending: 'Pending review', selected: 'Selected for approval', rejected: 'Rejected', needs_revision: 'Needs revision', blocked: 'Blocked', unchanged: 'Unchanged' };
@@ -106,6 +109,29 @@ async function dictionary() {
 bindForm('dictionary-form', async () => { dictionaryPage = 1; await dictionary(); });
 el('dictionary-prev').addEventListener('click', () => void action(async () => { dictionaryPage--; await dictionary(); }));
 el('dictionary-next').addEventListener('click', () => void action(async () => { dictionaryPage++; await dictionary(); }));
+async function pricingDictionary() {
+  const supplier = input('pricing-dictionary-supplier'), sourceNamespace = input('pricing-dictionary-namespace');
+  const result = await call('pricing_dictionary_get', {
+    ...(supplier || sourceNamespace ? { scope: { ...(supplier ? { supplier } : {}), ...(sourceNamespace ? { source_namespace: sourceNamespace } : {}) } } : {}),
+    ...(input('pricing-dictionary-query') ? { query: input('pricing-dictionary-query') } : {}), page: pricingDictionaryPage, page_size: 25,
+  });
+  const target = clear('pricing-dictionary-results'); metadata(target, result.metadata);
+  target.append(element('p', `Saved definitions · Revision ${result.data.revision}`));
+  if (!result.data.entries?.length) notice(target, 'No saved price-list definitions match this scope.');
+  else table(target, ['Term / kind', 'Meaning', 'Scope', 'Status / evidence'], result.data.entries.map((entry: any) => [
+    `${entry.value.term} · ${entry.value.kind.replaceAll('_', ' ')}`,
+    entry.value.definition,
+    entry.value.scope,
+    { status: entry.status, updated: entry.updated_at, stale_source: entry.stale_source, evidence: entry.evidence, ...(entry.pending ? { pending: entry.pending } : {}) },
+  ]));
+  notice(target, 'Saved definitions guide future reviews. Current Plytix attributes, options, families and instructions must be checked again before use.');
+  setDisabled(el<HTMLButtonElement>('pricing-dictionary-prev'), pricingDictionaryPage <= 1);
+  setDisabled(el<HTMLButtonElement>('pricing-dictionary-next'), !result.data.has_more);
+  select({ kind: 'pricing_dictionary', page: pricingDictionaryPage, ...result });
+}
+bindForm('pricing-dictionary-form', async () => { pricingDictionaryPage = 1; await pricingDictionary(); });
+el('pricing-dictionary-prev').addEventListener('click', () => void action(async () => { pricingDictionaryPage--; await pricingDictionary(); }));
+el('pricing-dictionary-next').addEventListener('click', () => void action(async () => { pricingDictionaryPage++; await pricingDictionary(); }));
 el('rules-load').addEventListener('click', () => void action(async () => { const result = await call('pricing_rules_get'); details(clear('rules'), 'Reviewed pricing rules and revision', result.data, true); select({ kind: 'pricing_rules', ...result }); }));
 el('available-rules-load').addEventListener('click', () => void action(async () => {
   const result = await call('pricing_rules_get'); const target = clear('available-rules');
@@ -130,12 +156,15 @@ bindForm('import-form', async () => {
   if (!file && !rowsText) throw new Error('Choose a CSV file or paste extracted rows.');
   let payload: Record<string, unknown>;
   if (file) {
-    if (file.size > 64000) throw new Error('Use a CSV under 64 KB with at most 20 rows per import.');
+    if (file.size > 64000) throw new Error('Use a CSV under 64 KB with at most 100 rows per import.');
     const bytes = await file.arrayBuffer();
     const hash = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))).map(n => n.toString(16).padStart(2, '0')).join('');
     payload = { csv: new TextDecoder('utf-8', { fatal: true }).decode(bytes), source_sha256: hash };
   } else { if (!/^[a-f0-9]{64}$/.test(input('source-hash'))) throw new Error('Enter the original document SHA-256.'); payload = { rows: JSON.parse(rowsText), source_sha256: input('source-hash') }; }
-  const result = await call('pricing_import', { source_name: input('source-name'), sku_column: input('sku-column'), ...payload });
+  const supplier = input('source-supplier'), sourceNamespace = input('source-namespace');
+  const result = await call('pricing_import', { source_name: input('source-name'), sku_column: input('sku-column'), ...payload,
+    ...(supplier || sourceNamespace ? { source_context: { ...(supplier ? { supplier } : {}), ...(sourceNamespace ? { source_namespace: sourceNamespace } : {}) } } : {}),
+  });
   imported = result.data; const target = clear('import-results'); clear('plan-results'); el<HTMLInputElement>('mapping-reviewed').checked = false;
   target.append(element('h2', 'Suggested families')); metadata(target, result.metadata);
   table(target, ['Family', 'Family ID', 'Matched rows'], imported.family_suggestions.map((family: any) => [family.name, family.family_id, family.matched_rows]));
@@ -226,11 +255,11 @@ function updateReviewSelection() {
   for (const id of ['review-revise', 'review-reject', 'review-reset']) setDisabled(el<HTMLButtonElement>(id), !editable.length || editable.length !== checked.length);
   const canSend = app.getHostCapabilities()?.message?.text || app.getHostCapabilities()?.updateModelContext;
   setDisabled(el<HTMLButtonElement>('review-send-instructions'), !canSend || !editable.length || editable.length !== checked.length || editable.some(line => !line.instruction?.trim()));
-  setDisabled(el<HTMLButtonElement>('review-recalculate'), !editable.length || editable.length > 100 || editable.length !== checked.length || editable.some(line => !['pending', 'needs_revision'].includes(line.status)));
+  setDisabled(el<HTMLButtonElement>('review-recalculate'), !editable.length || editable.length !== checked.length || editable.some(line => !['pending', 'needs_revision'].includes(line.status)));
   const ready = review?.lines.filter(line => line.status === 'selected' && !isFinished(line)).length ?? 0;
   el('review-ready-count').textContent = `${ready} selected for approval`;
-  setDisabled(el<HTMLButtonElement>('review-prepare'), !ready || ready > 100);
-  setDisabled(el<HTMLButtonElement>('review-prepare-checked'), !editable.length || editable.length > 100 || editable.length !== checked.length || editable.some(line => line.status !== 'selected'));
+  setDisabled(el<HTMLButtonElement>('review-prepare'), !ready);
+  setDisabled(el<HTMLButtonElement>('review-prepare-checked'), !editable.length || editable.length !== checked.length || editable.some(line => line.status !== 'selected'));
   el('review-lines').querySelectorAll<HTMLInputElement>('input[data-line-id]').forEach(input => {
     input.checked = checkedLines.has(input.dataset.lineId!);
     input.closest('tr')?.setAttribute('data-checked', String(input.checked));
@@ -239,7 +268,7 @@ function updateReviewSelection() {
 function renderReview(result: any, preservePrepared = false) {
   const next = reviewData(result);
   if (!preservePrepared || preparedRevision !== next.revision || review?.review_id !== next.review_id) {
-    preparedPlans = []; preparedApproval = null; preparedBlockReason = null; preparedRevision = null; clear('review-prepared');
+    preparedPlans = []; preparedApproval = null; preparedBlockReason = null; preparedRevision = null; preparedBatch = null; clear('review-prepared');
   }
   clear('review-instruction-status');
   if (review?.review_id !== next.review_id || review?.revision !== next.revision) { editingLines = []; el('review-edit-form').hidden = true; }
@@ -388,17 +417,32 @@ async function prepareReview(lineIds?: string[], forApproval = false) {
   else renderReview(await call('pricing_review_get', { review_id: review.review_id }));
   checkedLines.clear(); updateReviewSelection();
   const plans = result.data?.plans ?? [];
-  if (result.data?.pending_review || (lineIds && !forApproval)) {
-    notice(el('review-prepared'), 'Recalculation is complete. Review each refreshed line, then select the changes you want to submit for approval.');
+  preparedBatch = result.data?.batching ?? null;
+  if ((result.data?.pending_review && !result.data?.approval) || (lineIds && !forApproval)) {
+    renderBatchSummary(el('review-prepared'));
+    notice(el('review-prepared'), 'Review each refreshed line, then select the changes you want to submit for approval. Deferred lines retain their existing decisions.');
     if (result.data?.approval_blocked) notice(el('review-prepared'), result.data.approval_blocked);
     return;
   }
-  preparedPlans = plans; preparedApproval = result.data?.approval ?? null; preparedBlockReason = result.data?.approval_blocked ?? (preparedApproval ? null : 'The server did not return an exact approval manifest. Refresh the review and prepare the selected changes again.'); preparedRevision = review!.revision; renderPreparedPlans();
+  preparedApproval = result.data?.approval ?? null;
+  const approvedPlanIds = new Set((preparedApproval?.arguments.plans as { plan_id: string }[] | undefined)?.map(plan => plan.plan_id));
+  preparedPlans = preparedApproval ? plans.filter((plan: any) => approvedPlanIds.has(plan.plan_id)) : plans;
+  preparedBlockReason = result.data?.approval_blocked ?? (preparedApproval ? null : 'The server did not return an exact approval manifest. Refresh the review and prepare the selected changes again.'); preparedRevision = review!.revision; renderPreparedPlans();
+  if (result.data?.pending_review) notice(el('review-prepared'), 'Some refreshed lines need another review. Only the exact changes in the approval request can be posted.');
+}
+function renderBatchSummary(target: HTMLElement) {
+  if (!preparedBatch) return;
+  target.append(element('p', `${preparedBatch.prepared} of ${preparedBatch.requested} requested line${preparedBatch.requested === 1 ? '' : 's'} prepared for this batch.`));
+  if (preparedBatch.deferred_count) {
+    notice(target, `${preparedBatch.deferred_count} line${preparedBatch.deferred_count === 1 ? '' : 's'} deferred to a later batch. Their decisions are saved. After this batch is reviewed and completed, prepare the remaining selections.`);
+    details(target, 'Deferred lines and batch limits', { line_ids: preparedBatch.deferred_line_ids, reasons: preparedBatch.reasons });
+  }
 }
 function renderPreparedPlans() {
   const target = clear('review-prepared');
-  if (!preparedPlans.length || !review) { notice(target, 'No executable changes were prepared. Review blocked or unchanged lines above.'); return; }
+  if (!preparedPlans.length || !review) { renderBatchSummary(target); notice(target, preparedBlockReason ?? 'No executable changes were prepared. Review blocked or unchanged lines above.'); return; }
   const panel = element('section'); panel.className = 'prepared-plans'; panel.append(element('h3', preparedBlockReason ? 'Approval preparation needs attention' : 'Prepared for final approval'));
+  renderBatchSummary(panel);
   const count = preparedPlans.reduce((total, plan) => total + (plan.changes?.length ?? 0), 0);
   panel.append(element('p', `${count} exact change${count === 1 ? '' : 's'} ${preparedApproval ? 'prepared for one approval request' : `in ${preparedPlans.length} prepared plan${preparedPlans.length === 1 ? '' : 's'}`}. No catalog prices have been changed.`));
   table(panel, ['Plan', 'Changes', 'Expires'], preparedPlans.map(plan => [plan.plan_id, plan.changes?.length ?? 0, plan.expires_at ?? 'See plan details']));
@@ -420,7 +464,7 @@ function renderPreparedPlans() {
       notice(panel, 'Approval request sent to the conversation. Prices remain unchanged until the trusted approval is completed. Refresh statuses after execution.');
     } else notice(panel, 'Prepared changes are attached to the conversation. Ask the conversation to request final approval; this host cannot start that message from the workspace.');
   })); panel.append(request); target.append(panel);
-  select({ kind: 'pricing_review_prepared', review_id: review.review_id, revision: review.revision, plans: preparedPlans });
+  select({ kind: 'pricing_review_prepared', review_id: review.review_id, revision: review.revision, plans: preparedPlans, batching: preparedBatch });
 }
 el('attach').addEventListener('click', () => void action(async () => {
   if (!selection) return;

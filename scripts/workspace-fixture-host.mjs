@@ -23,6 +23,16 @@ const initialReview = { review_id: reviewId, revision: 0, title: 'Fixture suppli
 let review = clone(initialReview);
 let preparedLineIds = [];
 window.fixtureBlockApproval = false;
+window.fixtureBatchLimit = 100;
+window.fixtureChangedLine = null;
+window.fixtureLargeReview = (status = 'selected') => {
+  review = { ...clone(initialReview), revision: review.revision + 1, lines: Array.from({ length: 125 }, (_, index) => {
+    const item = line(`L${index}`, status); item.change.descendant_impact = [];
+    item.change.row_index = index; item.provenance.row_index = index;
+    return item;
+  }) };
+  preparedLineIds = []; window.fixtureBatchLimit = 10; window.fixtureChangedLine = null;
+};
 window.fixtureOpenReview = async () => { await bridge.sendToolInput({ arguments: { review_id: reviewId } }); await bridge.sendToolResult(envelope({ tabs: ['products', 'dictionary', 'pricing'], review_id: reviewId })); };
 window.fixtureCompletePrepared = () => { for (const id of preparedLineIds) { const row = review.lines.find(line => line.line_id === id); row.execution = { status: 'verified', message: 'Fixture readback matches the approved amount.' }; } review.revision++; };
 function checkedReview(args) { if (args.review_id !== reviewId) throw new Error('Fixture review not found.'); if (args.expected_revision !== undefined && args.expected_revision !== review.revision) throw new Error('Review changed. Refresh before saving decisions.'); }
@@ -33,6 +43,7 @@ bridge.oncalltool = async ({ name, arguments: args }) => {
     case 'products_get_full': return envelope({ product: { ...product, id: args.product_id }, family: { id: 'fixture-family', name: 'Fixture Sheets' }, assets: [{ id: 'asset', filename: 'sheet-photo.jpg', alt_text: 'Fixture sheet' }] });
     case 'products_inspect_inheritance': return envelope({ attributes: [{ label: 'price', levels: [{ product_id: 'fixture-a', reported_value: { status: 'reported', value: 10 }, override_marker: 'not_marked_overwritten', family_attribute: { attribute_level: 'parent_level' } }] }], ancestry: [{ product_id: 'fixture-a', product_type: 'STANDALONE' }], ancestry_status: { complete: true }, errors: [] });
     case 'catalog_dictionary': return envelope({ definitions: [{ term: 'List price', status: 'confirmed', meaning: 'Supplier list price per sheet', attribute_labels: ['price'], family_ids: ['fixture-family'], evidence: 'Fixture reviewed rule', updated_at: '2026-11-03T00:00:00Z' }], definitions_pagination: { has_more: false }, observations_pagination: { has_more: false }, observations: [], live_schema: { status: 'available', attributes: [{ label: 'price', type_class: 'NumberAttribute' }] } });
+    case 'pricing_dictionary_get': return envelope({ revision: 2, entries: [{ value: { kind: 'color', term: args.page === 2 ? 'Smoke' : 'CLR', definition: args.page === 2 ? 'Supplier gray tint; verify the current Plytix option.' : 'Supplier abbreviation for clear material; validate against the current color attribute.', scope: { supplier: 'Fixture supplier', source_namespace: 'Fixture sheets' } }, status: 'proposed', updated_at: '2026-11-03T00:00:00Z', stale_source: false, evidence: [{ source: 'document', reference: 'Fixture price list, page 1', observed_at: '2026-11-03T00:00:00Z' }] }], page: args.page, has_more: args.page === 1 });
     case 'pricing_rules_get': return envelope({ revision: 1, rules: [{ id: 'fixture-price', status: 'confirmed', family_ids: ['fixture-family'], target_attribute: 'price' }] });
     case 'pricing_import': return envelope({ import_id: '22222222-2222-4222-8222-222222222222', family_suggestions: [{ family_id: 'fixture-family', name: 'Fixture Sheets', matched_rows: 1 }], matches: [{ row_index: 0, sku: 'SHEET-A', status: 'matched', candidates: [{ product_id: 'fixture-a', sku: 'SHEET-A', family_id: 'fixture-family' }] }] });
     case 'pricing_plan': case 'pricing_plan_get': return envelope(plan);
@@ -53,7 +64,11 @@ bridge.oncalltool = async ({ name, arguments: args }) => {
     }
     case 'pricing_review_plan': {
       checkedReview(args);
-      const selected = review.lines.filter(row => args.line_ids ? args.line_ids.includes(row.line_id) : row.status === 'selected' && !row.execution);
+      const requested = review.lines.filter(row => args.line_ids ? args.line_ids.includes(row.line_id) : row.status === 'selected' && !row.execution);
+      const selected = requested.slice(0, window.fixtureBatchLimit);
+      // A deliberately small fixture manifest allowance exercises deferred UI
+      // without constructing large source strings; production computes exact size.
+      const batching = { requested: requested.length, prepared: selected.length, deferred_count: requested.length - selected.length, deferred_line_ids: requested.slice(selected.length).map(row => row.line_id), reasons: requested.length > selected.length ? ['approval_size_limit'] : [], max_changes: 100, estimated_api_requests: selected.length * 11, max_estimated_api_requests: 2048 };
       if (!selected.length) throw new Error('Choose at least one review line.');
       if (args.line_ids && selected.some(row => row.status !== 'selected')) {
         for (const row of selected) if (row.change) {
@@ -64,11 +79,15 @@ bridge.oncalltool = async ({ name, arguments: args }) => {
           for (const child of row.change.descendant_impact ?? []) if (!child.overridden) child.new_value = row.change.new_value;
           row.status = row.change.old_value === row.change.new_value ? 'unchanged' : 'pending';
         }
-        review.revision++; preparedLineIds = []; return envelope({ review, plans: [], pending_review: true });
+        review.revision++; preparedLineIds = []; return envelope({ review, plans: [], pending_review: true, batching });
       }
-      preparedLineIds = selected.map(row => row.line_id); review.revision++;
-      const approval = { tool_name: 'pricing_review_apply', arguments: { review_id: review.review_id, expected_revision: review.revision, plans: [{ plan_id: plan.plan_id, digest: plan.digest }], changes: selected.map(row => ({ line_id: row.line_id, ...row.change })) } };
-      return envelope({ review, pending_review: false, plans: [{ ...plan, changes: selected.map(row => row.change), expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }], ...(window.fixtureBlockApproval ? { approval_blocked: 'The complete approval manifest is too large; prepare a smaller checked selection. Saved decisions are unchanged.' } : { approval }) });
+      const changed = selected.filter(row => row.line_id === window.fixtureChangedLine);
+      for (const row of changed) { row.change.new_value += 1; row.status = 'pending'; }
+      const ready = selected.filter(row => row.status === 'selected');
+      preparedLineIds = ready.map(row => row.line_id); review.revision++;
+      const approval = { tool_name: 'pricing_review_apply', arguments: { review_id: review.review_id, expected_revision: review.revision, plans: [{ plan_id: plan.plan_id, digest: plan.digest }], changes: ready.map(row => ({ line_id: row.line_id, ...row.change })) } };
+      const plans = [{ ...plan, changes: ready.map(row => row.change), expires_at: new Date(Date.now() + 30 * 60_000).toISOString() }, ...(changed.length ? [{ ...plan, plan_id: '77777777-7777-4777-8777-777777777777', changes: changed.map(row => row.change) }] : [])];
+      return envelope({ review, pending_review: Boolean(changed.length), batching, plans, ...(window.fixtureBlockApproval ? { approval_blocked: 'The complete approval manifest is too large; prepare a smaller checked selection. Saved decisions are unchanged.' } : { approval }) });
     }
     default: throw new Error('No fixture exists for this tool; no network request was made.');
   }

@@ -61,7 +61,7 @@ See [knowledge operations and limitations](knowledge.md).
   the named tool, and the tool's permitted HTTP method and endpoint. A read tool
   cannot mutate data even when a different write tool is enabled.
 - `pricing_import`, `pricing_plan`, `pricing_review_create`,
-  `pricing_review_update` and `pricing_review_plan` are explicit local/cloud draft-storage tools,
+  `pricing_review_update`, `pricing_review_plan` and `pricing_dictionary_update` are explicit local/cloud draft-storage tools,
   exposed by default with `readOnlyHint: false`, `destructiveHint: false`, and
   `idempotentHint: false`. They save private source/plan files but receive no API
   mutation authority. Review row selections, modifications, rejections and notes
@@ -70,6 +70,11 @@ See [knowledge operations and limitations](knowledge.md).
   `pricing_apply` and `pricing_review_apply` remain hidden until separately
   allowlisted and require exact host approval. Batch apply permits only product
   PATCH routes; it cannot create/delete products or reset inheritance.
+- The pricing dictionary holds bounded advisory definitions, not executable rules.
+  Imports, plans, rule reads/saves and live dictionary discovery automatically save
+  compact scoped observations. Manual definitions and retirements are protected;
+  current Plytix schema, family membership, inheritance and product values must be
+  checked before reuse. No complete product or option-list snapshots belong there.
 - Every product, pricing-rule or shared-knowledge mutation requires a trusted approval provider to approve the
   exact validated argument snapshot for that invocation. No `approved` tool
   argument, annotation, service token or previous approval grants this permission.
@@ -132,7 +137,7 @@ installed. Cloud logging must not add header/body capture.
   These are resource guards, not distributed
   account-wide quotas or a hard billing cap.
 - Ordinary tool operations: 45 seconds, 512 upstream authentication/API requests,
-  and 8 MiB cumulative upstream JSON. Only `pricing_review_plan` and
+  and 8 MiB cumulative upstream JSON. `pricing_plan`, `pricing_review_plan` and
   `pricing_review_apply` receive 80 seconds, 4,096 requests and 64 MiB cumulative
   upstream JSON, to inspect complete selected container/descendant batches.
   Each individual fetch, including response-body consumption, has a 15-second

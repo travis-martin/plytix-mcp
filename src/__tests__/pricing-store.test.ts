@@ -27,6 +27,13 @@ const scope = 'a'.repeat(64);
 const parseCounter = (value: unknown) => value as { count: number };
 
 describe('cloud pricing CAS storage', () => {
+  it('does not upload unchanged advisory memory or create an extra generation', async () => {
+    const backend = new MemoryObjects(), store = new GcsPricingStore(backend, scope);
+    await store.create('dictionary.json', { revision: 1 });
+    const write = vi.spyOn(backend, 'write');
+    expect(await store.update('dictionary.json', value => value, value => value)).toEqual({ revision: 1 });
+    expect(write).not.toHaveBeenCalled();
+  });
   it('does not lose concurrent updates across independent store instances', async () => {
     const backend = new MemoryObjects(); const a = new GcsPricingStore(backend, scope), b = new GcsPricingStore(backend, scope);
     await a.create('rules.json', { count: 0 });

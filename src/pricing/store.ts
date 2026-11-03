@@ -4,7 +4,7 @@ import { readBoundedJson, updateJsonFile } from '../knowledge/store.js';
 import { PlytixError } from '../types.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
-const keyPattern = /^(?:rules|rules-revision-\d+|[a-f0-9-]{36})\.json$/;
+const keyPattern = /^(?:rules|dictionary|rules-revision-\d+|[a-f0-9-]{36})\.json$/;
 function checkKey(key: string) {
   if (!keyPattern.test(key)) throw new PlytixError('Invalid pricing storage key');
 }
@@ -127,7 +127,10 @@ export class GcsPricingStore implements PricingStore {
     for (let attempt = 0; attempt < 5; attempt++) {
       const previous = await this.backend.read(path);
       const value = change(parse(this.decode(previous)));
-      try { await this.backend.write(path, encode(value), previous?.generation ?? 0); return value; }
+      const bytes = encode(value);
+      // Repeated dictionary observations do not need another object generation.
+      if (previous?.bytes.equals(bytes)) return value;
+      try { await this.backend.write(path, bytes, previous?.generation ?? 0); return value; }
       catch (error) { if (!(error instanceof PricingStoreConflict)) throw error; }
     }
     throw new PlytixError('Cloud pricing file is busy; review current state before retrying');

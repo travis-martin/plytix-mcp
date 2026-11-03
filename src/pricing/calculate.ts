@@ -1,4 +1,4 @@
-import type { PricingRule, SourceRow } from './model.js';
+import { PRICING_LIMITS, type PricingRule, type SourceRow } from './model.js';
 import { PlytixError } from '../types.js';
 
 /** Decimal rational arithmetic: no eval, binary rounding, percentages or unit conversion inferred. */
@@ -68,7 +68,7 @@ export function parseCsv(csv: string): SourceRow[] {
   if (field || row.length || closed) { row.push(field); records.push(row); }
   const headers = records.shift()?.map(value => value.trim()) ?? [];
   if (!headers.length || headers.some(value => !value || ['__proto__', 'constructor', 'prototype'].includes(value)) || new Set(headers).size !== headers.length) throw new PlytixError('CSV requires unique nonempty column headers');
-  if (!records.length || records.length > 20) throw new PlytixError('Import must contain between 1 and 20 rows; split larger documents into reviewed batches');
+  if (!records.length || records.length > PRICING_LIMITS.import_rows) throw new PlytixError(`Import must contain between 1 and ${PRICING_LIMITS.import_rows} rows; split larger documents into reviewed batches`);
   return records.map((cells, i) => {
     if (cells.length !== headers.length) throw new PlytixError('CSV row column count differs from header');
     return { source_ref: `CSV record ${i + 2}`, values: Object.fromEntries(headers.map((header, index) => [header, cells[index]])) };

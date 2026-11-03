@@ -22,6 +22,13 @@ snapshots and execution results are also retained. Proposed knowledge is never
 silently promoted to an executable rule. See [pricing workflow](docs/pricing.md)
 and [private remote setup](docs/remote-pricing.md).
 
+Imports accept up to 100 source rows with batched SKU searches. Reviews group
+compatible plans and size each approval batch to its request cost and payload;
+deferred selections remain available for subsequent reviewed batches. A bounded
+private `dictionary.json` retains supplier/source/family-scoped terminology and
+setup observations. Current Plytix data remains authoritative; stored dictionary
+entries do not execute calculations or grant write permission.
+
 Local storage uses private JSON files; optional Google Cloud Storage uses object
 generation checks for durable remote rules and one-shot execution reservation.
 Both transports share the same handlers. Authenticated HTTP form-approval sessions

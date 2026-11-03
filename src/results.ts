@@ -73,6 +73,7 @@ export const toolDataSchemas: Record<string, z.ZodTypeAny> = {
       z.object({ status: z.literal('unavailable'), attributes: z.null() }),
     ]).nullable(),
     live_requested: z.boolean(), partial: z.boolean(), notes: z.array(z.string()),
+    pricing_dictionary: z.unknown().optional(), pricing_learning: z.unknown().optional(),
   }),
 };
 

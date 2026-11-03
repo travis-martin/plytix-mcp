@@ -1,5 +1,6 @@
 import { z } from 'zod';
 
+export const PRICING_LIMITS = { import_rows: 100, plan_changes: 100, review_lines: 1000, search_page_size: 100, search_pages: 10 } as const;
 export const label = z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/);
 const text = z.string().trim().min(1).max(200);
 export const decimal = z.string().regex(/^-?\d{1,12}(?:\.\d{1,6})?$/);
@@ -11,8 +12,9 @@ export const importInput = z.object({
   source_name: text,
   source_sha256: z.string().regex(/^[a-f0-9]{64}$/),
   sku_column: text,
+  source_context: z.object({ supplier: text.optional(), source_namespace: text.optional() }).strict().optional(),
   csv: z.string().min(1).max(64000).optional(),
-  rows: z.array(sourceRow).min(1).max(20).optional(),
+  rows: z.array(sourceRow).min(1).max(PRICING_LIMITS.import_rows).optional(),
 }).strict();
 export const ruleSchema = z.object({
   id: label, name: text, status: z.enum(['proposed', 'confirmed']),
@@ -41,10 +43,10 @@ export const ruleSchema = z.object({
 export type PricingRule = z.infer<typeof ruleSchema>;
 export type SourceRow = z.infer<typeof sourceRow>;
 export const mappingSchema = z.object({
-  row_index: z.number().int().min(0).max(19), product_id: text, family_id: text,
+  row_index: z.number().int().min(0).max(PRICING_LIMITS.import_rows - 1), product_id: text, family_id: text,
   proposed_value: decimal.optional(), review_note: z.string().trim().min(1).max(2000).optional(),
 }).strict();
-export const planInput = z.object({ import_id: z.string().uuid(), rule_ids: z.array(label).min(1).max(10), mappings: z.array(mappingSchema).min(1).max(20) }).strict();
+export const planInput = z.object({ import_id: z.string().uuid(), rule_ids: z.array(label).min(1).max(10), mappings: z.array(mappingSchema).min(1).max(PRICING_LIMITS.plan_changes) }).strict();
 export const changeSchema = z.object({
   row_index: z.number().int(), product_id: text, sku: z.string(), family_id: text,
   attribute: label, old_value: z.number().finite(), new_value: z.number().finite(),
@@ -55,7 +57,7 @@ export const changeSchema = z.object({
   descendant_impact: z.array(z.object({ product_id: text, sku: z.string(), old_value: z.number().finite(), new_value: z.number().finite(), overridden: z.boolean(), evidence_digest: z.string(), review_evidence: z.record(z.string(), z.unknown()) }).strict()).max(10),
 }).strict();
 export type PricingChange = z.infer<typeof changeSchema>;
-export const applyInput = z.object({ plan_id: z.string().uuid(), digest: z.string().regex(/^[a-f0-9]{64}$/), changes: z.array(changeSchema).min(1).max(20) }).strict();
+export const applyInput = z.object({ plan_id: z.string().uuid(), digest: z.string().regex(/^[a-f0-9]{64}$/), changes: z.array(changeSchema).min(1).max(PRICING_LIMITS.plan_changes) }).strict();
 export const rulesInput = z.object({ expected_revision: z.number().int().nonnegative(), rules: z.array(ruleSchema).max(100) }).strict();
 export const rulesDocument = z.object({
   revision: z.number().int().nonnegative(), updated_at: z.string(), rules: z.array(ruleSchema).max(100),

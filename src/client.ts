@@ -73,6 +73,11 @@ export class PlytixClient {
   /** Force subsequent verification reads to reach the upstream API. */
   clearOperationReadCache(): void { this.assertActive(); this.operationReads?.clear(); }
   checkOperationActive(): void { this.assertActive(); }
+  /** Remaining execution time, used to defer untouched pricing rows before a write. */
+  remainingOperationTimeMs(): number {
+    if (this.cancelled || this.operationSignal?.aborted) return 0;
+    return Math.max(0, this.operationDeadline - Date.now());
+  }
 
   private activeOperation?: Promise<unknown>;
   private operationSignal?: AbortSignal;
@@ -81,7 +86,7 @@ export class PlytixClient {
   runOperation<T>(work: () => Promise<T>, signal?: AbortSignal, toolName?: string): Promise<T> {
     if (this.activeOperation) return Promise.reject(new PlytixError('Another tool operation is in progress'));
     if (signal?.aborted || this.cancelled) return Promise.reject(new PlytixError('Plytix operation cancelled'));
-    const batchReview = toolName === 'pricing_review_plan' || toolName === 'pricing_review_apply';
+    const batchReview = toolName === 'pricing_plan' || toolName === 'pricing_review_plan' || toolName === 'pricing_review_apply';
     this.operationDurationMs = batchReview ? 80_000 : 45_000;
     this.operationRequestLimit = batchReview ? 4096 : 512;
     this.operationResponseLimit = (batchReview ? 64 : 8) * 1024 * 1024;

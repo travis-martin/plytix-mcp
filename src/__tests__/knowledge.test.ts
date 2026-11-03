@@ -1,4 +1,4 @@
-import { afterEach, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, expect, it, vi } from 'vitest';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
@@ -15,8 +15,13 @@ import { PlytixError } from '../types.js';
 import { KnowledgeService } from '../knowledge/service.js';
 
 const directories: string[] = [];
+beforeEach(() => {
+  // These fixtures exercise shared knowledge independently of operator pricing storage.
+  vi.stubEnv('PLYTIX_PRICING_DIR', ''); vi.stubEnv('PLYTIX_PRICING_GCS_BUCKET', '');
+});
 afterEach(async () => {
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   for (const directory of directories.splice(0)) {
     if (!resolve(directory).startsWith(resolve(tmpdir()) + '\\') && !resolve(directory).startsWith(resolve(tmpdir()) + '/')) {
       throw new Error('Unexpected fixture directory');

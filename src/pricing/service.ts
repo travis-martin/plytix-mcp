@@ -3,9 +3,11 @@ import { z } from 'zod';
 import type { PlytixClient } from '../client.js';
 import { PlytixError, type PlytixProduct, type PlytixResult } from '../types.js';
 import { createPricingStore, type PricingStore } from './store.js';
-import { applyInput, changeSchema, importInput, planInput, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
+import { applyInput, changeSchema, importInput, planInput, PRICING_LIMITS, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
 import { calculate, parseCsv, withinChangeLimit } from './calculate.js';
 import { reviewBinding, reviewDocument } from './review-model.js';
+import { PricingMemory } from './memory.js';
+import { learnImport, learnPlan } from './learning.js';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -14,15 +16,15 @@ function canonical(value: unknown): string {
 }
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 function fail(message: string): never { throw new PlytixError(message); }
-const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), rows: z.array(sourceRow).max(20), created_at: z.string() });
+const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), source_context: importInput.shape.source_context, rows: z.array(sourceRow).max(PRICING_LIMITS.import_rows), created_at: z.string() });
 export const storedPlan = z.object({
   plan_id: z.string().uuid(), digest: z.string(), created_at: z.string(), expires_at: z.string(),
   import_id: z.string().uuid(), rules_revision: z.number(), input: planInput,
   rules_digest: z.string(), source_digest: z.string(), rule_snapshot: z.array(ruleSchema),
   source_snapshot: docSchema,
   review_binding: reviewBinding.optional(),
-  changes: z.array(changeSchema).max(20), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), product_id: z.string().optional(), family_id: z.string().optional(), reason: z.string() })),
-  state: z.enum(['draft', 'executing', 'complete', 'stopped']),
+  changes: z.array(changeSchema).max(PRICING_LIMITS.plan_changes), blocked: z.array(z.object({ row_index: z.number(), rule_id: z.string(), product_id: z.string().optional(), family_id: z.string().optional(), reason: z.string() })),
+  state: z.enum(['draft', 'executing', 'complete', 'stopped', 'deferred']),
   results: z.array(z.object({ product_id: z.string(), attribute: z.string(), status: z.string() })),
 });
 export type StoredPlan = z.infer<typeof storedPlan>;
@@ -72,7 +74,9 @@ export class PricingService {
   private async put(directory: PricingStore, id: string, value: unknown) { await directory.create(`${id}.json`, value); }
   async rulesGet() {
     const directory = await this.directory();
-    return { ...await this.readRules(directory), storage: directory.kind, sharing: 'Connections with different credentials have separate pricing files. Rules never authorize writes.' };
+    const rules = await this.readRules(directory);
+    const learning = rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
+    return { ...rules, learning, storage: directory.kind, sharing: 'Connections with different credentials have separate pricing files. Rules never authorize writes.' };
   }
   async rulesSave(input: z.infer<typeof rulesInput>) {
     input = rulesInput.parse(input);
@@ -92,36 +96,68 @@ export class PricingService {
         history: [...previous.history, ...(previous.revision ? [{ revision: previous.revision, updated_at: previous.updated_at, rules: previous.rules }] : [])] });
     });
     // The immutable revision copy preserves reviewed rules for later audits.
+    const warnings: string[] = [];
     try { await this.put(directory, `rules-revision-${next.revision}`, next); }
-    catch { return { ...next, partial: true, warning: 'Rules and history were saved atomically, but the extra immutable revision copy is unavailable. Review rules.json before retrying.' }; }
-    return next;
+    catch { warnings.push('Rules and history were saved atomically, but the extra immutable revision copy is unavailable. Review rules.json before retrying.'); }
+    const learning = await this.learnSafely(() => new PricingMemory(directory).recordRules(next.rules, next.revision));
+    if (learning.status === 'unavailable') warnings.push('Rules were saved, but their advisory dictionary index could not be updated.');
+    return { ...next, learning, ...(warnings.length ? { partial: true, warning: warnings.join(' ') } : {}) };
+  }
+  private async learnSafely(work: () => Promise<object>) {
+    try { return { status: 'stored' as const, ...await work() }; }
+    catch { return { status: 'unavailable' as const, warning: 'Advisory dictionary learning could not be saved; use current Plytix and reviewed rules.' }; }
   }
   async importDocument(input: z.infer<typeof importInput>) {
     input = importInput.parse(input);
     if (Boolean(input.csv) === Boolean(input.rows)) fail('Supply exactly one CSV document or extracted rows');
     if (input.csv && createHash('sha256').update(input.csv, 'utf8').digest('hex') !== input.source_sha256) fail('CSV source hash does not match the submitted UTF-8 document');
-    const rows = z.array(sourceRow).min(1).max(20).parse(input.csv ? parseCsv(input.csv) : input.rows);
+    const rows = z.array(sourceRow).min(1).max(PRICING_LIMITS.import_rows).parse(input.csv ? parseCsv(input.csv) : input.rows);
     if (rows.some(row => !row.values[input.sku_column]?.trim())) fail('Every source row requires a nonempty SKU');
     const directory = await this.directory();
     const matches = [];
     const families = new Map<string, { family_id: string; name: string | null; matched_rows: number[] }>();
+    // Text eq is case-insensitive upstream. Page the entire OR query, then use
+    // exact case-sensitive SKU matching locally; a first-page hit is not proof
+    // of uniqueness. Repeated source SKUs share the same lookup.
+    const skus = [...new Set(rows.map(row => row.values[input.sku_column].trim()))];
+    const products = new Map<string, PlytixProduct>();
+    let complete = false, pages = 0, expectedTotal: number | undefined, expectedPages: number | undefined;
+    for (let page = 1; page <= PRICING_LIMITS.search_pages; page++) {
+      const response = await this.client.searchProducts({ filters: skus.map(sku => [{ field: 'sku', operator: 'eq', value: sku }]), attributes: ['sku', 'product_family_id'], pagination: { page, page_size: PRICING_LIMITS.search_page_size } });
+      pages++;
+      const pagination = response.pagination;
+      const total = pagination?.total ?? pagination?.total_count;
+      if (response.meta?.complete === false || (pagination?.page !== undefined && pagination.page !== page) ||
+          (expectedTotal !== undefined && total !== undefined && total !== expectedTotal) ||
+          (expectedPages !== undefined && pagination?.pages !== undefined && pagination.pages !== expectedPages) ||
+          response.data.some(product => !product.id || products.has(product.id)) || new Set(response.data.map(product => product.id)).size !== response.data.length) break;
+      expectedTotal ??= total; expectedPages ??= pagination?.pages;
+      for (const product of response.data) products.set(product.id, product);
+      if (page === 1 && products.size === 0 && (total === 0 || pagination?.pages === 0)) { complete = total === undefined || total === 0; break; }
+      if ((total !== undefined && products.size > total) || (pagination?.pages !== undefined && pagination.pages < page)) break;
+      const last = expectedPages !== undefined ? page === expectedPages : expectedTotal !== undefined ? products.size === expectedTotal : response.data.length < PRICING_LIMITS.search_page_size;
+      if (last) { complete = expectedTotal === undefined || products.size === expectedTotal; break; }
+      if (!response.data.length || response.data.length < PRICING_LIMITS.search_page_size) break;
+    }
     for (const [row_index, row] of rows.entries()) {
       const sku = row.values[input.sku_column].trim();
-      const response = await this.client.searchProducts({ filters: [[{ field: 'sku', operator: 'eq', value: sku }]], attributes: ['sku', 'product_family_id'], pagination: { page: 1, page_size: 3 } });
-      const candidates = response.data.filter(p => p.sku === sku).map(p => ({ product_id: p.id, sku: p.sku, family_id: p.product_family_id ?? null }));
+      const candidates = [...products.values()].filter(p => p.sku === sku).map(p => ({ product_id: p.id, sku: p.sku, family_id: p.product_family_id ?? null }));
       for (const candidate of candidates) if (candidate.family_id) {
         const current = families.get(candidate.family_id) ?? { family_id: candidate.family_id, name: null, matched_rows: [] };
         current.matched_rows.push(row_index); families.set(candidate.family_id, current);
       }
-      matches.push({ row_index, sku, status: candidates.length === 1 && candidates[0].family_id ? 'candidate' : candidates.length ? 'ambiguous_or_missing_family' : 'unmatched', candidates });
+      matches.push({ row_index, sku, status: !complete ? 'incomplete_lookup' : candidates.length === 1 && candidates[0].family_id ? 'candidate' : candidates.length ? 'ambiguous_or_missing_family' : 'unmatched', candidates });
     }
     for (const family of families.values()) {
       try { family.name = (await this.client.getFamily(family.family_id)).data[0]?.name ?? null; }
       catch { /* A suggested ID is evidence; unavailable family name is explicitly null. */ }
     }
-    const document = { id: randomUUID(), source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: digest(rows), sku_column: input.sku_column, rows, created_at: new Date().toISOString() };
+    const document = { id: randomUUID(), source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: digest(rows), sku_column: input.sku_column, ...(input.source_context ? { source_context: input.source_context } : {}), rows, created_at: new Date().toISOString() };
     await this.put(directory, document.id, document);
-    return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, family_suggestions: [...families.values()], matches, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
+    const learning = await this.learnSafely(() => learnImport(new PricingMemory(directory), {
+      ...document, columns: [...new Set(rows.flatMap(row => Object.keys(row.values)))], family_suggestions: complete ? [...families.values()] : [],
+    }));
+    return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, family_suggestions: [...families.values()], matches, lookup: { complete, pages, unique_skus: skus.length }, learning, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. Incomplete lookups do not establish unique matches. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
   }
   private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule): Promise<PricingChange> {
     if ((rule.effective_from && Date.now() < Date.parse(rule.effective_from)) || (rule.effective_until && Date.now() > Date.parse(rule.effective_until))) fail('Pricing rule is outside its reviewed effective time window');
@@ -227,7 +263,7 @@ export class PricingService {
     const document = docSchema.parse(await directory.read(`${input.import_id}.json`));
     const rules = await this.readRules(directory);
     const selected = input.rule_ids.map(id => rules.rules.find(rule => rule.id === id && rule.status === 'confirmed') ?? fail('Only current confirmed pricing rules may calculate an update'));
-    if (input.mappings.length * selected.length > 20 || new Set(input.rule_ids).size !== input.rule_ids.length) fail('A plan supports at most 20 unique product/attribute changes');
+    if (input.mappings.length * selected.length > PRICING_LIMITS.plan_changes || new Set(input.rule_ids).size !== input.rule_ids.length) fail(`A plan supports at most ${PRICING_LIMITS.plan_changes} unique product/attribute changes`);
     const changes: PricingChange[] = [], blocked: StoredPlan['blocked'] = [];
     const targets = new Set<string>();
     for (const mapping of input.mappings) for (const rule of selected) {
@@ -242,17 +278,31 @@ export class PricingService {
     }
     return { changes, blocked, rules_revision: rules.revision, rules_digest: digest(rules), source_digest: digest(document), rule_snapshot: selected, source_snapshot: document };
   }
-  async plan(input: z.infer<typeof planInput>, binding?: z.infer<typeof reviewBinding>) {
+  async plan(input: z.infer<typeof planInput>, binding?: z.infer<typeof reviewBinding>, options: { store?: PricingStore; persist?: boolean } = {}) {
     input = planInput.parse(input);
-    const directory = await this.directory();
+    const directory = options.store ?? await this.directory();
     const built = await this.build(input, directory);
     const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: input.import_id, input, ...built, ...(binding ? { review_binding: reviewBinding.parse(binding) } : {}), state: 'draft', results: [] };
+    if (options.persist !== false) await this.put(directory, plan.plan_id, plan);
+    // Grouped review previews also refresh advisory setup once per group.
+    const learning = await this.learnSafely(() => learnPlan(new PricingMemory(directory), { ...plan.source_snapshot, changes: plan.changes, rules: plan.rule_snapshot }));
+    return { ...plan, learning };
+  }
+  /** Split a freshly calculated internal snapshot without rereading the same
+   * source or catalog. Apply still rebuilds and freshly checks every write. */
+  async saveReviewSubset(source: StoredPlan, mappings: z.infer<typeof planInput>['mappings'], binding: z.infer<typeof reviewBinding>, directory: PricingStore) {
+    if (source.state !== 'draft' || source.input.rule_ids.length !== 1 || Date.parse(source.expires_at) <= Date.now()) fail('Only a fresh single-rule review snapshot can be partitioned');
+    const input = planInput.parse({ ...source.input, mappings });
+    if (mappings.some(mapping => !source.input.mappings.some(original => canonical(original) === canonical(mapping)))) fail('Review partition changed its source mappings');
+    const included = (item: { row_index: number; product_id?: string }) => mappings.some(mapping => mapping.row_index === item.row_index && mapping.product_id === item.product_id);
+    const built = { changes: source.changes.filter(included), blocked: source.blocked.filter(included), rules_revision: source.rules_revision, rules_digest: source.rules_digest, source_digest: source.source_digest, rule_snapshot: source.rule_snapshot, source_snapshot: source.source_snapshot };
+    const plan = storedPlan.parse({ ...source, ...built, plan_id: randomUUID(), input, review_binding: binding, digest: digest({ input, ...built }) });
     await this.put(directory, plan.plan_id, plan);
     return plan;
   }
-  async planGet(planId: string) {
+  async planGet(planId: string, store?: PricingStore) {
     z.string().uuid().parse(planId);
-    const directory = await this.directory();
+    const directory = store ?? await this.directory();
     return storedPlan.parse(await directory.read(`${planId}.json`));
   }
   private async checkReviewBinding(plan: StoredPlan, directory: PricingStore) {
@@ -292,12 +342,20 @@ export class PricingService {
       current.state = 'executing'; return current;
     });
     const persist = async () => directory.update(key, value => storedPlan.parse(value), () => plan);
+    const deferRemaining = async () => {
+      for (const change of plan.changes) if (!plan.results.some(result => result.product_id === change.product_id && result.attribute === change.attribute)) {
+        plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'skipped' });
+      }
+      plan.state = 'deferred'; await persist();
+      return { ...plan, deferred: true, deferred_count: plan.results.filter(result => result.status === 'skipped').length, reason: 'Execution time reserved for verification; untouched lines need a fresh reviewed batch.' };
+    };
     try {
       await this.checkReviewBinding(plan, directory);
       const fresh = await this.build(plan.input, directory);
       if (fresh.blocked.length || digest({ input: plan.input, ...fresh }) !== plan.digest) fail('Pricing values, rules or inheritance changed after review; no updates were sent');
       for (const change of plan.changes) {
         if (change.old_value === change.new_value) { plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'unchanged' }); continue; }
+        if (this.client.remainingOperationTimeMs() < 10_000) return deferRemaining();
         // Final per-row guard narrows the external race window. Plytix has no CAS here.
         this.client.clearOperationReadCache();
         await this.checkReviewBinding(plan, directory);
@@ -311,6 +369,7 @@ export class PricingService {
         const ownerBefore = (await this.client.getProduct(change.product_id)).data[0];
         if (!ownerBefore || ownerBefore.id !== change.product_id) fail('Pricing owner evidence is unavailable before execution');
         const ownerStructure = digest({ type: ownerBefore.product_type, parent: ownerBefore._parent_id, overrides: ownerBefore.overwritten_attributes });
+        if (this.client.remainingOperationTimeMs() < 10_000) return deferRemaining();
         plan.results.push({ product_id: change.product_id, attribute: change.attribute, status: 'sending_or_unknown' });
         await persist();
         await this.client.updateProduct(change.product_id, { attributes: { [change.attribute]: change.new_value } });
