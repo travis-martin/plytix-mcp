@@ -4,6 +4,7 @@ import { configureToolPolicy, type ToolPolicyOptions } from './tools/register.js
 import { registerProductTools } from './tools/products.js';
 import { registerFamilyTools } from './tools/families.js';
 import { registerAttributeTools } from './tools/attributes.js';
+import { registerAttributeOptionTools } from './tools/attribute-options.js';
 import { registerAssetTools } from './tools/assets.js';
 import { registerCategoryTools } from './tools/categories.js';
 import { registerVariantTools } from './tools/variants.js';
@@ -24,12 +25,13 @@ export function createServer(
   client: PlytixClient, writeTools: ReadonlySet<string> = new Set(),
   options: ToolPolicyOptions & { knowledgeRegistry?: KnowledgeRegistry } = {},
 ) {
-  const server = new McpServer({ name: 'plytix-mcp', version: '0.10.0' }, { instructions: DISCOVERY_INSTRUCTIONS });
+  const server = new McpServer({ name: 'plytix-mcp', version: '0.11.0' }, { instructions: DISCOVERY_INSTRUCTIONS });
   const knowledge = options.knowledge ?? new KnowledgeService(client, options.knowledgeRegistry, options.knowledgeWriteTools);
   configureToolPolicy(server, writeTools, client, { ...options, knowledge });
   registerProductTools(server, client);
   registerFamilyTools(server, client);
   registerAttributeTools(server, client);
+  registerAttributeOptionTools(server, client);
   registerAssetTools(server, client);
   registerCategoryTools(server, client);
   registerVariantTools(server, client);

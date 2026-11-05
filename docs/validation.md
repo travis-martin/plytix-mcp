@@ -1,5 +1,21 @@
 # Validation
 
+## Version 0.11.0 — November 5, 2026
+
+- Typecheck and build passed; all 440 fixture tests across 36 files passed.
+- Added coverage for exact option preservation, zero-usage removal guards, stale
+  definitions, uncached rechecks, declined approvals, route isolation, uncertain
+  writes, no-op behavior, and the shared HTTP handler.
+- The portable plugin built and passed manifest validation and isolated startup
+  with fixture credentials and networking disabled (52 default read/draft tools).
+- One owner-authorized option cleanup executed successfully through local stdio
+  with only `attributes_update_options` enabled for that process. The tool and an
+  independent subsequent read confirmed the exact saved order and manual sorting.
+  The original definition and detailed catalog audit remain outside this repository.
+- The existing cloud deployment, persistent connection settings, and credential
+  configuration were not changed. This does not claim remote deployment.
+
+
 ## Version 0.10.0 — November 3, 2026 (prepared; not deployed)
 
 - Typecheck, build and all 418 fixture tests across 35 files pass. Coverage includes

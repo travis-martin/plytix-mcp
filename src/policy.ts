@@ -1,7 +1,7 @@
 export const WRITE_TOOLS = new Set([
   'pricing_apply', 'pricing_rules_save', 'pricing_review_apply', 'pricing_guidance_save',
   'products_create', 'products_update', 'products_assign_family',
-  'products_set_attribute', 'products_clear_attribute',
+  'products_set_attribute', 'products_clear_attribute', 'attributes_update_options',
   'families_create', 'families_link_attribute', 'families_unlink_attribute',
   'assets_update', 'assets_link', 'assets_unlink', 'categories_link', 'categories_unlink',
   'variants_create', 'variants_link', 'variants_unlink', 'variants_resync',
@@ -78,6 +78,7 @@ const WRITE_ROUTES: Record<string, { method: string; path: RegExp }> = {
   products_create: { method: 'POST', path: /^\/api\/v2\/products$/ },
   products_update: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
   products_set_attribute: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
+  attributes_update_options: { method: 'PATCH', path: /^\/api\/v1\/attributes\/product\/[^/]+$/ },
   products_clear_attribute: { method: 'PATCH', path: /^\/api\/v2\/products\/[^/]+$/ },
   products_assign_family: { method: 'POST', path: /^\/api\/v2\/products\/[^/]+\/family$/ },
   families_create: { method: 'POST', path: /^\/api\/v1\/product_families$/ },

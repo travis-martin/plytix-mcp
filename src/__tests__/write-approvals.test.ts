@@ -261,6 +261,7 @@ describe('per-tool API route policy', () => {
     ['products_update', 'PATCH', '/api/v2/products/id'],
     ['products_set_attribute', 'PATCH', '/api/v2/products/id'],
     ['products_clear_attribute', 'PATCH', '/api/v2/products/id'],
+    ['attributes_update_options', 'PATCH', '/api/v1/attributes/product/id'],
     ['products_assign_family', 'POST', '/api/v2/products/id/family'],
     ['families_create', 'POST', '/api/v1/product_families'],
     ['families_link_attribute', 'POST', '/api/v1/product_families/id/attributes/link'],

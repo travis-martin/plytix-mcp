@@ -552,11 +552,25 @@ export class PlytixClient {
    * Get full attribute details by ID.
    * Use this to get options for dropdown/multiselect attributes.
    */
-  async getAttributeById(attrId: string): Promise<PlytixAttributeDetail | null> {
-    const result = await this.request<PlytixAttributeDetail>(
-      `/api/v1/attributes/product/${encodeURIComponent(attrId)}`
-    );
+  async getAttributeById(attrId: string, fresh = false): Promise<PlytixAttributeDetail | null> {
+    const endpoint = `/api/v1/attributes/product/${encodeURIComponent(attrId)}`;
+    const result = fresh
+      ? await this.requestUncached<PlytixAttributeDetail>(endpoint)
+      : await this.request<PlytixAttributeDetail>(endpoint);
     return result.data?.[0] ?? null;
+  }
+
+  /** Only options and manual ordering; tool preflight guards removal and drift. */
+  async updateAttributeOptions(attrId: string, options: string[]): Promise<PlytixResult<PlytixAttributeDetail>> {
+    try {
+      return await this.request<PlytixAttributeDetail>(
+        `/api/v1/attributes/product/${encodeURIComponent(attrId)}`,
+        { method: 'PATCH', body: JSON.stringify({ options, manual_sorting: true }) },
+      );
+    } finally {
+      // An uncertain write must not leave a stale definition in the label cache.
+      this.attributesByLabel.clear();
+    }
   }
 
   async searchAttributes(body: PlytixSearchBody = {}): Promise<PlytixResult<PlytixAttributeDetail>> {

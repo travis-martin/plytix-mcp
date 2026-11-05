@@ -213,3 +213,31 @@ describe('stateless Streamable HTTP', () => {
     expect(status).toBe(400);
   });
 });
+
+it('shares guarded option cleanup and exact write allowlisting over HTTP', async () => {
+  const before = { id: 'field', label: 'size', name: 'Size', type_class: 'DropdownAttribute',
+    modified: 'before', options: ['Large', 'Small', 'Unused'], manual_sorting: false };
+  const after = { ...before, modified: 'after', options: ['Small', 'Large'], manual_sorting: true };
+  const get = vi.spyOn(PlytixClient.prototype, 'getAttributeById')
+    .mockResolvedValueOnce(before).mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+  vi.spyOn(PlytixClient.prototype, 'searchProducts').mockResolvedValue({ data: [],
+    pagination: { page: 1, page_size: 1, count: 0, total_count: 1000 } });
+  const update = vi.spyOn(PlytixClient.prototype, 'updateAttributeOptions').mockResolvedValue({ data: [after] });
+  const token = 'fixture-service-token-long-enough-for-testing';
+  const url = await start({ authToken: token, writeTools: new Set(['attributes_update_options']), writeApprovalMode: 'host' });
+  const client = new Client({ name: 'fixture-client', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(url, {
+    requestInit: { headers: { ...headers, 'X-MCP-Token': token } },
+  }));
+  try {
+    expect((await client.listTools()).tools.filter(t => WRITE_TOOLS.has(t.name)).map(t => t.name)).toEqual(['attributes_update_options']);
+    const result = await client.callTool({ name: 'attributes_update_options', arguments: {
+      attribute_id: 'field', expected_label: 'size', expected_modified: 'before',
+      expected_options: before.options, options: after.options,
+    } });
+    expect(result.isError).not.toBe(true);
+    expect((result.structuredContent as any).data.verified).toBe(true);
+    expect(update).toHaveBeenCalledExactlyOnceWith('field', ['Small', 'Large']);
+    expect(get.mock.calls).toEqual([['field', true], ['field', true], ['field', true]]);
+  } finally { await client.close(); }
+});
