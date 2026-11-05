@@ -1,5 +1,21 @@
 # Validation
 
+## Version 0.12.0 — November 5, 2026
+
+- Typecheck, build, all 448 fixture tests across 36 files, portable package
+  validation, and isolated package startup passed.
+- Added tests for exact addition declarations, omitted/mismatched/duplicate
+  declarations, initialization of an empty definition, and in-use removal
+  protection when additions are included. Complete option approval snapshots
+  retain every field within a bounded 64,000-character limit.
+- Five owner-authorized attribute-option updates succeeded through local MCP
+  stdio with independent saved-state checks inside each tool call. The updates
+  included explicit additions, zero-usage removals, and manual order. Detailed
+  private definitions and product evidence remain outside this repository.
+- No cloud deployment, credential changes, or persistent permission changes were
+  performed. Omitting add_options preserves the existing cleanup-only behavior.
+
+
 ## Version 0.11.0 — November 5, 2026
 
 - Typecheck and build passed; all 440 fixture tests across 36 files passed.

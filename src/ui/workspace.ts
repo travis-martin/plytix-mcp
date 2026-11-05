@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 
-const app = new App({ name: 'Plytix Catalog Workspace', version: '0.11.0' });
+const app = new App({ name: 'Plytix Catalog Workspace', version: '0.12.0' });
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id).value.trim();
 const status = (message: string, error = false) => { el('status').textContent = message; el('status').className = error ? 'notice error' : ''; };

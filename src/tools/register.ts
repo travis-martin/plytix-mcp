@@ -55,9 +55,9 @@ export function configureToolPolicy(
 }
 
 type FormRoute = 'openai/elicitation/create' | 'openai/form' | 'elicitation/create';
-const largeApprovalTools = new Set(['pricing_review_apply', 'pricing_guidance_save']);
+const largeApprovalTools = new Set(['pricing_review_apply', 'pricing_guidance_save', 'attributes_update_options']);
 export const writeApprovalArgumentLimit = (toolName: string): number => largeApprovalTools.has(toolName) ? 64_000 : 16_000;
-/** Preserve every validated field; compact only the bounded batch manifest. */
+/** Preserve every validated field; compact large review snapshots without truncation. */
 export const serializeWriteApprovalArguments = (toolName: string, args: Record<string, unknown>): string =>
   JSON.stringify(args, null, largeApprovalTools.has(toolName) ? undefined : 2);
 const isObject = (value: unknown): value is Record<string, unknown> =>
@@ -82,7 +82,7 @@ export function getWriteApprovalSupport(server: McpServer) {
     detail: mode === 'host'
       ? 'The operator delegates write authorization to the trusted host tool-permission policy. This server does not verify that a human prompt was displayed or accepted.'
       : 'Each enabled write also requires the server approval form. Negotiated form support does not prove that a human has approved a change.',
-    argument_limits: { default: 16_000, pricing_review_apply: 64_000, pricing_guidance_save: 64_000 },
+    argument_limits: { default: 16_000, pricing_review_apply: 64_000, pricing_guidance_save: 64_000, attributes_update_options: 64_000 },
     ...(host ? { host: { name: host.name, version: host.version } } : {}) };
 }
 

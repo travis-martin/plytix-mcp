@@ -38,8 +38,8 @@ afterEach(async () => {
 });
 
 describe('write approval boundary', () => {
-  it('permits larger exact snapshots only for batch application and complete protected guidance', () => {
-    const largeSnapshots = new Set(['pricing_review_apply', 'pricing_guidance_save']);
+  it('permits larger exact snapshots only for batch application, protected guidance and complete option snapshots', () => {
+    const largeSnapshots = new Set(['pricing_review_apply', 'pricing_guidance_save', 'attributes_update_options']);
     for (const tool of largeSnapshots) expect(writeApprovalArgumentLimit(tool)).toBe(64_000);
     for (const tool of WRITE_TOOLS) if (!largeSnapshots.has(tool)) expect(writeApprovalArgumentLimit(tool)).toBe(16_000);
   });
@@ -51,6 +51,9 @@ describe('write approval boundary', () => {
     const guidance = { expected_revision: 1, instructions: [{ id: 'fixture', text: 'Quoted "value"\nwith newline' }], exclusions: [] };
     expect(serializeWriteApprovalArguments('pricing_guidance_save', guidance)).toBe(JSON.stringify(guidance));
     expect(serializeWriteApprovalArguments('products_update', input)).toBe(JSON.stringify(input, null, 2));
+    const options = { expected_options: ['12\"', '2\"'], options: ['2\"', '6 mm', '12\"'], add_options: ['6 mm'] };
+    expect(JSON.parse(serializeWriteApprovalArguments('attributes_update_options', options))).toEqual(options);
+    expect(serializeWriteApprovalArguments('attributes_update_options', options)).toBe(JSON.stringify(options));
   });
 
   it('executes the complete compact batch snapshot and refuses oversized batches before approval', async () => {

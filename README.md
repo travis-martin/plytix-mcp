@@ -47,7 +47,7 @@ decisions and execution audits stay credential-private. Local and remote servers
 do not synchronize merely by running the same version. See
 [persistent pricing workspaces](docs/pricing-storage.md).
 
-Version 0.11.0 provides 52 default read/draft tools and 25 separately allowlisted
+Version 0.12.0 provides 52 default read/draft tools and 25 separately allowlisted
 write tools (77 total when all catalog/pricing writes are enabled). Default form
 mode requires the supported approval integration; private operator connections
 can opt into host mode to use the trusted client's normal write permissions.
@@ -60,8 +60,9 @@ Node/TypeScript provides one shared implementation for stdio and stateless
 Streamable HTTP. Read tools are enabled by default. Mutation tools are hidden and
 the API client rejects writes until explicitly enabled.
 
-The optional `attributes_update_options` tool reorders exact existing options and
-removes only values confirmed unused across the catalog. It requires a fresh
+The optional `attributes_update_options` tool reorders exact existing options,
+adds only explicitly reviewed new values, and removes only values confirmed unused
+across the catalog. It requires a fresh
 definition snapshot, refuses in-use removals, and verifies the saved order. See
 [attribute option cleanup](docs/attribute-options.md).
 

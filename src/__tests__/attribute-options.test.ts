@@ -55,6 +55,40 @@ async function fixture(run: (f: {
 }
 
 describe('guarded option cleanup', () => {
+  it('adds only explicitly reviewed values without requiring product-value edits', async () => {
+    await fixture(async f => {
+      const options = [...original.options, '6 mm (1/4")'];
+      const result = await f.call({ options, add_options: ['6 mm (1/4")'] });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent.data.added_options).toEqual(['6 mm (1/4")']);
+      expect(f.writes).toEqual([{ options, manual_sorting: true }]);
+      expect(f.searches).toEqual([]);
+    });
+  });
+  it('initializes an empty existing option list with declared values', async () => {
+    await fixture(async f => {
+      const result = await f.call({ expected_options: [], options: ['2"', '12"'], add_options: ['12"', '2"'] });
+      expect(result.isError).not.toBe(true);
+      expect(result.structuredContent.data.added_options).toEqual(['2"', '12"']);
+      expect(f.searches).toEqual([]);
+    }, { initial: { options: [] } });
+  });
+  it.each([
+    { options: [...original.options, 'new'], add_options: [] },
+    { options: original.options, add_options: ['new'] },
+    { options: [...original.options, 'new'], add_options: ['new', 'extra'] },
+    { options: [...original.options, 'new'], add_options: ['new', 'new'] },
+    { options: original.options, add_options: ['12"'] },
+  ])('rejects mismatched or duplicate addition declarations %j', async overrides => {
+    await fixture(async f => { expect((await f.call(overrides)).isError).toBe(true); expect(f.writes).toEqual([]); });
+  });
+  it('checks removals even when explicitly adding new options in the same call', async () => {
+    await fixture(async f => {
+      const result = await f.call({ options: ['2"', '12"', 'new'], add_options: ['new'] });
+      expect(result.isError).toBe(true); expect(f.writes).toEqual([]);
+    }, { usage: { data: [{ id: 'used' }], pagination: { count: 1 } } });
+  });
+
   it('removes only unused values, keeps exact quotes, orders numerically as supplied and reads back uncached', async () => {
     await fixture(async f => {
       const result = await f.call();

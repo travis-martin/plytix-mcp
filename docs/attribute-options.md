@@ -1,13 +1,19 @@
 # Attribute option cleanup
 
 `attributes_update_options` sets manual order for existing DropdownAttribute and
-MultiSelectAttribute options. It can remove unused options, but cannot add, rename,
-or normalize values. It cannot edit product values or other attribute settings.
+MultiSelectAttribute options. It can add explicitly reviewed new options and remove
+unused ones. It cannot edit product values or other attribute settings; it does not
+rename or normalize existing product values.
 
 Read `attributes_get` first. Pass its ID, exact label, modified timestamp, complete
 current `options` as `expected_options`, and the complete retained list in the
-desired order as `options`. Both lists must contain unique, nonempty strings.
-Keep usage auditing and semantic grouping in the calling workflow.
+desired order as `options`. Include every newly introduced value in `add_options`;
+that explicit list must exactly match the new values in `options`. Omitting it
+retains cleanup-only behavior. All lists require unique, nonempty strings;
+`expected_options` may be empty to initialize an existing empty definition, while
+the final `options` list must contain at least one value. Full approval snapshots
+are compacted without truncation within a 64,000-character limit. Keep usage
+auditing and semantic grouping in the calling workflow.
 
 The tool is hidden by default. An operator must explicitly include
 `attributes_update_options` in `PLYTIX_WRITE_TOOLS`; the existing form or trusted
