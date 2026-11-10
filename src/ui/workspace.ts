@@ -399,9 +399,10 @@ function renderReviewLines() {
     if (line.instruction) { const instruction = element('p', line.instruction); instruction.className = 'line-instruction'; product.append(element('small', 'Instruction'), instruction); }
     row.append(product);
     const values = element('td'); values.className = 'line-values amount';
-    values.append(element('small', 'Current'), element('div', amount(c.old_value, c.currency)));
+    const verified = line.execution?.status === 'verified';
+    values.append(element('small', verified ? 'Previous' : 'Current'), element('div', amount(c.old_value, c.currency)));
     if (c.calculated_value !== undefined) values.append(element('small', 'Calculated from source'), element('div', amount(c.calculated_value, c.currency)));
-    values.append(element('small', c.calculated_value === undefined ? 'Calculated proposal' : 'Proposed update'));
+    values.append(element('small', verified ? 'Verified value' : c.calculated_value === undefined ? 'Calculated proposal' : 'Proposed update'));
     const proposed = element('div', amount(c.new_value, c.currency)); proposed.className = 'new-amount'; values.append(proposed);
     if (line.proposed_value !== undefined && line.proposed_value !== null) { values.append(element('small', 'Requested revision'), element('strong', amount(line.proposed_value, c.currency))); }
     if (Number.isFinite(c.old_value) && Number.isFinite(c.new_value)) {
@@ -419,7 +420,7 @@ function renderReviewLines() {
     if (c.review_evidence) details(source, 'Attribute evidence', c.review_evidence);
     if (c.descendant_impact?.length) {
       const d = element('details'); d.className = 'line-evidence'; d.append(element('summary', `${c.descendant_impact.length} descendant${c.descendant_impact.length === 1 ? '' : 's'} · ${c.descendant_impact.filter((child: any) => child.overridden).length} overrides preserved`));
-      table(d, ['SKU', 'Current', 'Proposed', 'Override'], c.descendant_impact.map((child: any) => [child.sku || child.product_id, amount(child.old_value, c.currency), amount(child.new_value, c.currency), child.overridden ? 'Preserved' : 'Inherits update'])); source.append(d);
+      table(d, ['SKU', verified ? 'Previous' : 'Current', verified ? 'Verified' : 'Proposed', 'Override'], c.descendant_impact.map((child: any) => [child.sku || child.product_id, amount(child.old_value, c.currency), amount(child.new_value, c.currency), child.overridden ? 'Preserved' : 'Inherits update'])); source.append(d);
     }
     if (reviewPanel) { const evidence = element('details'), content = element('div'); for (const child of Array.from(source.childNodes)) content.append(child.cloneNode(true)); evidence.append(element('summary', 'Source and evidence'), content); product.append(evidence); }
     row.append(source);

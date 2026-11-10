@@ -256,8 +256,10 @@ const copiedApproval = await frame.getByLabel('Request to paste into the convers
 check('Sidebar approval remains an exact review request without a write', copiedApproval.includes('pricing_review_apply') && copiedApproval.includes('not approval'));
 await page.evaluate(() => window.fixtureCompletePrepared());
 await frame.locator('#review-refresh').click();
+await row('A').getByText('verified', { exact: true }).waitFor();
 check('Completed sidebar lines show verification and do not count as awaiting approval', (await row('A').innerText()).includes('verified') && (await frame.locator('#review-ready-count').innerText()) === '0 selected for approval');
 check('Completed sidebar lines cannot be selected or modified', await row('A').locator('input.line-check').isDisabled() && await row('A').getByRole('button', { name: 'Modify / instruct', exact: true }).isDisabled());
+check('Completed costs distinguish previous and verified values', (await row('A').locator('.line-values').innerText()).includes('Previous') && (await row('A').locator('.line-values').innerText()).includes('Verified value') && !(await row('A').locator('.line-values').innerText()).includes('Current'));
 await frame.locator('#review-workspace').scrollIntoViewIfNeeded();
 await page.screenshot({ path: `${directory}/pricing-sidebar-verified.png`, fullPage: false });
 await page.setViewportSize({ width: 390, height: 844 });
