@@ -103,12 +103,72 @@ describe('streamlined reviewed pricing batches', () => {
     expect((await f.reviews.apply(p.approval!.arguments)).state).toBe('complete'); expect(f.submit).not.toHaveBeenCalled();
   });
 
-  it('polls a saved job with delayed counters without reposting or writing through refresh', async () => {
+  it.each([undefined, {}, { ok: '0', error: '0', cancelled: '0' }])('settles Finished with empty counters %j only after full readback', async summary => {
     const f = await fixture(), p = await f.prepare();
-    f.poll.mockResolvedValueOnce({ status: 'Finished', summary: { ok: '0', error: '0' } });
+    f.poll.mockResolvedValue({ status: 'Finished', summary, errors: [], products: [] });
+    const result = await f.reviews.apply(p.approval!.arguments);
+    expect(result.state).toBe('complete');
+    expect(result.batch.bulk).toMatchObject({ settled: true, completion_evidence: 'verified_readback' });
+    expect(result.review.counts.verified).toBe(2);
+    expect(result.batch.metrics.validation_searches).toBe(1);
+    expect(f.children.filter(c => c.overwritten_attributes!.length).every(c => c.attributes!.supplier_1_cost === 77)).toBe(true);
+    await f.reviews.refresh(p.review.review_id);
+    await f.reviews.apply(p.approval!.arguments);
+    expect(f.submit).toHaveBeenCalledTimes(1); expect(f.patch).not.toHaveBeenCalled();
+  });
+
+  it('recovers an existing submitted job with empty counters through read-only refresh', async () => {
+    const f = await fixture(), p = await f.prepare();
+    f.poll.mockResolvedValueOnce({ status: 'Queued', summary: { ok: '0', error: '0' } });
     const pending = await f.reviews.apply(p.approval!.arguments);
     expect(pending.state).toBe('pending'); expect(pending.review.counts.submitted).toBe(2);
+    f.poll.mockResolvedValue({ status: 'Finished', summary: { ok: '0', error: '0' } });
     expect((await f.reviews.refresh(p.review.review_id)).counts.verified).toBe(2);
+    expect(f.submit).toHaveBeenCalledTimes(1); expect(f.patch).not.toHaveBeenCalled();
+  });
+
+  it('keeps empty-counter jobs pending until delayed owner and child values match', async () => {
+    const f = await fixture(), p = await f.prepare();
+    f.submit.mockImplementation(async rows => { f.set(rows[0].id, rows[0].data.attributes); return 'job-1'; });
+    f.poll.mockResolvedValue({ status: 'Finished', summary: {} });
+    const pending = await f.reviews.apply(p.approval!.arguments);
+    expect(pending.state).toBe('pending'); expect(pending.batch.bulk?.settled).toBe(false);
+    expect(pending.review.lines.map(l => l.execution?.status)).toEqual(['verified', 'validation_pending']);
+    f.set('owner-1', { supplier_1_cost: 12 });
+    const refreshed = await f.reviews.refresh(p.review.review_id);
+    expect(refreshed.counts.verified).toBe(2); expect(refreshed.batches[0].state).toBe('complete');
+    expect(f.submit).toHaveBeenCalledTimes(1); expect(f.patch).not.toHaveBeenCalled();
+  });
+
+  it.each(['primary_supplier', 'override', 'unapproved'])('does not settle an empty-counter job with a preserved %s mismatch', async field => {
+    const f = await fixture(2, 1), p = await f.prepare(), submit = f.submit.getMockImplementation()!;
+    f.poll.mockResolvedValue({ status: 'Finished' });
+    f.submit.mockImplementation(async rows => {
+      const id = await submit(rows);
+      if (field === 'primary_supplier') f.owners[0].attributes!.primary_supplier = 'Supplier 2';
+      if (field === 'override') f.children[5].attributes!.supplier_1_cost = 999;
+      if (field === 'unapproved') f.owners[2].attributes!.supplier_2_cost = 999;
+      return id;
+    });
+    const result = await f.reviews.apply(p.approval!.arguments);
+    expect(result.state).not.toBe('complete'); expect(result.batch.bulk?.settled).toBe(false);
+    await f.reviews.refresh(p.review.review_id);
+    expect(f.submit).toHaveBeenCalledTimes(1); expect(f.patch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'Running', summary: {} },
+    { status: 'Finished', summary: { ok: '1', error: '0' } },
+    { status: 'Finished', summary: {}, errors: [{ id: 'unknown-product' }] },
+    { status: 'Finished', summary: {}, errors: { message: 'unrecognized error shape' } },
+    { status: 'Failed', summary: {} },
+    { status: 'Cancelled', summary: {} },
+    { status: 'Finished', summary: { ok: 'invalid' } },
+  ])('does not treat incomplete or erroneous jobs as an empty successful result: %j', async job => {
+    const f = await fixture(), p = await f.prepare(); f.poll.mockResolvedValue(job);
+    const result = await f.reviews.apply(p.approval!.arguments);
+    expect(result.state).not.toBe('complete'); expect(result.batch.bulk?.completion_evidence).toBeUndefined();
+    await f.reviews.refresh(p.review.review_id);
     expect(f.submit).toHaveBeenCalledTimes(1); expect(f.patch).not.toHaveBeenCalled();
   });
 

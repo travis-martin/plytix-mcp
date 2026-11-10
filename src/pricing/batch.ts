@@ -48,6 +48,7 @@ export class PricingBatch {
     };
     const outcome = (product: string, attribute: string) => record.outcomes.find(o => o.product_id === product && o.attribute === attribute)!;
     let phase: 'preflight' | 'execution' | 'validation' = 'preflight';
+    let finishedWithoutCounters = false;
     try {
       if (digest(record.approval_arguments) !== record.manifest_digest || digest(record.changes) !== digest(plans.flatMap(p => p.changes))) throw new PlytixError('Saved batch approval or plan evidence changed');
       const approvedPlans = record.approval_arguments.plans as Array<{ plan_id: string; digest: string }>;
@@ -136,8 +137,13 @@ export class PricingBatch {
         // were written. Keep polling missing row results and never replay them.
         record.bulk.unresolved_errors = Math.max(0, (failed ? record.bulk.product_ids.length - counter('ok') : rejected) - identified.size);
         if (!Number.isFinite(record.bulk.unresolved_errors)) throw new PlytixError('Bulk job result counters are invalid');
+        // Some successful Plytix jobs report Finished with absent/zero counters.
+        // This only permits the normal full-baseline readback. It is not proof
+        // of completion and never makes a submitted row eligible to resend.
+        finishedWithoutCounters = /^finished$/i.test(String(job.status)) && total === 0 &&
+          (job.errors == null || (Array.isArray(job.errors) && job.errors.length === 0)) && !record.bulk.unresolved_errors && !identified.size;
         await persist();
-        if (!record.bulk.settled) { record.state = 'pending'; return record; }
+        if (!record.bulk.settled && !finishedWithoutCounters) { record.state = 'pending'; return record; }
       }
       const canVerify = record.outcomes.some(o => ['submitted', 'validation_pending', 'verified', 'failed'].includes(o.status) || (record.used_transport === 'patch' && o.status === 'sending_or_unknown'));
       if (canVerify && record.baseline_id && this.client.remainingOperationTimeMs() >= 1000) {
@@ -174,9 +180,13 @@ export class PricingBatch {
             o.message = 'Final values, inheritance or preserved fields differ; refresh validation without reposting';
           } else { o.status = 'verified'; delete o.message; }
         }
+        if (finishedWithoutCounters && !record.errors.length && record.outcomes.every(o => ['verified', 'unchanged'].includes(o.status))) {
+          record.bulk!.settled = true;
+          record.bulk!.completion_evidence = 'verified_readback';
+        }
       }
       if (record.bulk?.unresolved_errors) record.errors.push('Bulk job reports rejected or cancelled products whose row results are not available yet; refresh without reposting');
-      record.state = record.outcomes.every(o => ['verified', 'unchanged'].includes(o.status)) && !record.errors.length ? 'complete'
+      record.state = record.outcomes.every(o => ['verified', 'unchanged'].includes(o.status)) && !record.errors.length && (!record.bulk || record.bulk.settled) ? 'complete'
         : record.outcomes.some(o => ['sending_or_unknown', 'failed', 'conflict'].includes(o.status)) || record.errors.length ? 'stopped' : 'pending';
       return record;
     } catch (error) {

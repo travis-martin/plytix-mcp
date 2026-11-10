@@ -13,6 +13,31 @@ automatically confirms a learned business rule.
 
 ## Workflow
 
+### Open the editable review
+
+Review creation, reading, preparation and refresh advertise the shared MCP App,
+so compatible hosts open the saved review directly. Catalog Workspace also has
+a thread entrypoint alongside its global navigation entrypoint. The table keeps
+per-line and batch selections, rejections, revisions, instructions and execution
+statuses. Completed lines are locked and no longer count as awaiting approval.
+
+When the chat does not expose the native app, an operator checkout can host the
+same deployed UI in a local browser panel after `npm run build`:
+
+```powershell
+node scripts/review-panel.mjs --url https://EXISTING-SERVICE/mcp --review REVIEW-UUID --env-file C:/ABSOLUTE/PATH/.env --account EXISTING-ACCOUNT --gcloud C:/ABSOLUTE/PATH/gcloud.cmd
+```
+
+Open the printed loopback URL in the chat's browser side panel. Credentials stay
+in the local helper process. The panel permits only the named review's read,
+refresh, draft-update and preparation tools; it cannot apply prices, save rules,
+change permissions or access another review. Draft edits save to the remote
+review. Its approval/instruction controls produce a request to copy into chat
+when a native conversation bridge is unavailable. Copying a request is never
+approval. Stop the launcher to close access; reopen it if authentication expires.
+
+### Prepare and approve
+
 1. Read `pricing_guidance_get` before every pricing job, then read the uploaded
    document with the host's document/spreadsheet reader. Preserve
    file name, original SHA-256, page/sheet/row references, currency, units, dates,

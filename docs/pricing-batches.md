@@ -14,9 +14,13 @@ The implementation is shared by stdio and HTTP.
 2. Save the baseline and reserve the batch durably. Combine all approved numeric
    attributes for each owner. Send one bulk update containing those owners.
    Never write inherited child values or reset their overrides.
-3. Poll the saved job ID. A `Finished` label alone is insufficient: completed
-   counters must cover every submitted owner. Delayed row-error details remain
-   visible and can be polled again without reposting.
+3. Poll the saved job ID. A `Finished` label alone is insufficient. Normally,
+   completed counters must cover every submitted owner. A finished job with
+   absent or all-zero counters and no row errors may proceed to full readback;
+   it settles only after every owner, child, override, preserved field and
+   family configuration matches. Its audit records `verified_readback` as the
+   completion evidence. In-progress jobs, partial nonzero counters and failures
+   do not qualify. Delayed row-error details remain visible without reposting.
 4. Validate all owners and children together with fresh paginated family reads.
    Verify inherited costs and preserved overrides, other supplier slots, primary
    suppliers, raw dimensions and captured identity/restriction fields. Unexpected

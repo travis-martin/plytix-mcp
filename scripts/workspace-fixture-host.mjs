@@ -43,7 +43,8 @@ window.fixtureLargeReview = (status = 'selected') => {
   }) };
   preparedLineIds = []; window.fixtureBatchLimit = 10; window.fixtureChangedLine = null;
 };
-window.fixtureOpenReview = async () => { await bridge.sendToolInput({ arguments: { review_id: reviewId } }); await bridge.sendToolResult(envelope({ tabs: ['products', 'dictionary', 'pricing'], review_id: reviewId })); };
+window.fixtureOpenReview = async (reviewPanel = false) => { await bridge.sendToolInput({ arguments: { review_id: reviewId } }); await bridge.sendToolResult(envelope({ tabs: ['products', 'dictionary', 'pricing'], review_id: reviewId, review_panel: reviewPanel })); };
+window.fixtureResetReview = () => { review = clone(initialReview); preparedLineIds = []; window.fixtureBatchLimit = 100; window.fixtureChangedLine = null; window.fixtureBlockApproval = false; };
 window.fixtureCompletePrepared = () => { for (const id of preparedLineIds) { const row = review.lines.find(line => line.line_id === id); row.execution = { status: 'verified', message: 'Fixture readback matches the approved amount.' }; } review.revision++; };
 window.fixturePendingBatch = () => {
   const states = ['verified', 'validation_pending', 'queued', 'failed', 'conflict', 'sending_or_unknown', 'submitted'];

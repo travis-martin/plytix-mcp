@@ -17,7 +17,7 @@ export const batchRecord = z.object({
   created_at: z.string(), updated_at: z.string(), lease_id: z.string().optional(), lease_until: z.number().optional(),
   changes: z.array(changeSchema), outcomes: z.array(outcomeSchema),
   baseline_id: z.string().uuid().optional(),
-  bulk: z.object({ job_id: z.string(), product_ids: z.array(z.string()), settled: z.boolean(), status: z.string().optional(), unresolved_errors: z.number().int().nonnegative().default(0) }).optional(),
+  bulk: z.object({ job_id: z.string(), product_ids: z.array(z.string()), settled: z.boolean(), status: z.string().optional(), unresolved_errors: z.number().int().nonnegative().default(0), completion_evidence: z.literal('verified_readback').optional() }).optional(),
   retry_at: z.number().optional(), errors: z.array(z.string()).default([]),
   metrics: z.object({ preflight_searches: z.number(), validation_searches: z.number(), patch_attempts: z.number(), bulk_attempts: z.number(), polls: z.number(), rate_limit_errors: z.number() }),
 }).strict();

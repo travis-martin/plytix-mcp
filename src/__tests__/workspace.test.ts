@@ -14,6 +14,11 @@ it('opens a read-only workspace through the shared server with a self-contained 
     const tool = (await client.listTools()).tools.find(item => item.name === 'catalog_workspace');
     expect(tool?.annotations?.readOnlyHint).toBe(true);
     expect(tool?._meta?.ui).toEqual({ resourceUri: WORKSPACE_URI });
+    expect(tool?._meta?.['openai/ui']).toEqual({ entrypoints: [{ type: 'global' }, { type: 'thread' }] });
+    const tools = (await client.listTools()).tools;
+    for (const name of ['pricing_review_create', 'pricing_review_get', 'pricing_review_refresh', 'pricing_review_plan']) {
+      expect(tools.find(t => t.name === name)?._meta?.ui).toEqual({ resourceUri: WORKSPACE_URI });
+    }
     const result: any = await client.callTool({ name: 'catalog_workspace', arguments: {} });
     expect(result.isError).not.toBe(true);
     expect(result.structuredContent.data.tabs).toEqual(['products', 'dictionary', 'pricing']);

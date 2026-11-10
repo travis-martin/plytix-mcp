@@ -8,4 +8,5 @@
 !src/**
 !scripts/
 !scripts/build-ui.mjs
+!scripts/review-panel-host.mjs
 src/__tests__/

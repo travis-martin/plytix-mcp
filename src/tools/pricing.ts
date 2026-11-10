@@ -2,6 +2,7 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
 import { registerTool } from './register.js';
+import { REVIEW_UI_META } from './workspace.js';
 import { applyInput, importInput, planInput, rulesInput, PRICING_LIMITS } from '../pricing/model.js';
 import { memoryGetInput, memoryUpdateInput } from '../pricing/memory.js';
 import { PricingDictionaryService } from '../pricing/dictionary.js';
@@ -62,18 +63,22 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     title: 'Apply Reviewed Price Updates', description: 'Execute the exact reviewed plan and full changes after trusted host approval. Recheck values, rules and inheritance, reserve plan once, update and read back each value. Stops on uncertainty; no automatic retry or rollback. Only allowlisted pricing_apply can PATCH products.', inputSchema: applyInput.shape,
   }, async (args: z.infer<typeof applyInput>) => json(await pricing.apply(args)));
   registerTool(server, 'pricing_review_create', {
+    _meta: REVIEW_UI_META,
     title: 'Create a Price Review', description: 'Combine saved plans into a durable private review with per-line source evidence, inheritance impacts and decisions. No Plytix changes. Lines start pending, blocked or unchanged; selection never authorizes a write.', inputSchema: reviewCreateInput.shape,
   }, async (args: z.infer<typeof reviewCreateInput>) => json(await reviews.create(args)));
   registerTool(server, 'pricing_review_get', {
+    _meta: REVIEW_UI_META,
     title: 'Read Price Review Status', description: 'Read every line decision and latest execution/readback status, including pending, rejected, revised, blocked, selected, verified and uncertain lines. Never retries writes.', inputSchema: reviewGetInput.shape,
   }, async ({ review_id }: z.infer<typeof reviewGetInput>) => json(await reviews.get(review_id)));
   registerTool(server, 'pricing_review_refresh', {
+    _meta: REVIEW_UI_META,
     title: 'Validate Submitted Price Updates', description: 'Poll existing bulk jobs and validate owners, children, overrides and preserved fields using paginated reads. Updates the private audit only. Never submits, retries or resumes product writes; queued changes require the exact approved pricing_review_apply manifest.', inputSchema: reviewGetInput.shape,
   }, async ({ review_id }: z.infer<typeof reviewGetInput>) => json(await reviews.refresh(review_id)));
   registerTool(server, 'pricing_review_update', {
     title: 'Revise Price Review Decisions', description: 'Save individual or batch draft selections, rejections, instructions and exact proposed amounts using the current review revision. Modified amounts require an instruction and fresh recalculation/selection. No Plytix changes; clears previous prepared approval snapshots.', inputSchema: reviewUpdateInput.shape,
   }, async (args: z.infer<typeof reviewUpdateInput>) => json(await reviews.update(args)));
   registerTool(server, 'pricing_review_plan', {
+    _meta: REVIEW_UI_META,
     title: 'Prepare Selected Review Lines', description: 'Recalculate selected lines (or explicit line IDs) against current catalog, rules, inheritance and overrides. Group compatible plans and automatically size the next batch to execution and approval limits. Return batching/deferred counts, fresh review and exact approval arguments. Changed evidence returns to pending. No Plytix changes.', inputSchema: reviewPlanInput.shape,
   }, async (args: z.infer<typeof reviewPlanInput>) => json(await reviews.plan(args)));
   registerTool(server, 'pricing_review_apply', {

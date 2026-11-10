@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { registerTool } from './register.js';
 
 export const WORKSPACE_URI = 'ui://plytix/workspace';
+export const REVIEW_UI_META = { ui: { resourceUri: WORKSPACE_URI } };
 export function registerWorkspaceTools(server: McpServer) {
   registerTool<{ review_id?: string }>(server, 'catalog_workspace', {
     title: 'Catalog Workspace',
@@ -11,7 +12,7 @@ export function registerWorkspaceTools(server: McpServer) {
     inputSchema: { review_id: z.string().uuid().optional().describe('Saved pricing review to open directly') },
     _meta: {
       ui: { resourceUri: WORKSPACE_URI },
-      'openai/ui': { entrypoints: [{ type: 'global' }] },
+      'openai/ui': { entrypoints: [{ type: 'global' }, { type: 'thread' }] },
     },
   }, async ({ review_id }) => ({ content: [{ type: 'text', text: JSON.stringify({
     tabs: ['products', 'dictionary', 'pricing'],
