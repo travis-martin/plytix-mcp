@@ -1,4 +1,4 @@
-# Plytix Catalog plugin
+# Plytix Studio plugin
 
 The plugin packages the same TypeScript stdio server used by the HTTP deployment.
 Its four skills cover catalog exploration, quality audits, inheritance, and reviewed
@@ -60,7 +60,7 @@ When the remote connection is primary, prepare a clearly labeled local fallback:
 node scripts/plugin-prepare-local.mjs --host-writes --all-write-tools --local-backup
 ```
 
-`--local-backup` labels only the private prepared package **Plytix Catalog (Local
+`--local-backup` labels only the private prepared package **Plytix Studio (Local
 Backup)** and adds `+local-backup.1` to its source version for host cache refresh.
 The plugin name `plytix-catalog`, marketplace identity, portable package and server
 behavior remain unchanged. Omit the flag and prepare again to restore the portable
@@ -94,6 +94,41 @@ the duplicate form. Verify authentication and the configured approval behavior i
 the actual host; fixture roundtrips alone do not prove compatibility. Keep
 deployment, credentials, permissions and publishing under their existing approval
 requirements. See the repository's `docs/remote-pricing.md`.
+
+### Private remote Codex profile
+
+After building the portable package, prepare a desktop profile for an already
+verified private Cloud Run connection:
+
+```powershell
+node scripts/plugin-prepare-remote.mjs --connection-file "C:/absolute/private/connection.json"
+```
+
+The ignored input JSON contains only `url`, `env_file`, `account`, and `gcloud`,
+with optional `startup_timeout_sec` and `tool_timeout_sec`. Use the existing HTTPS
+MCP URL, absolute paths to the original credential file and gcloud launcher, and
+the already authorized Google account. Do not put tokens, headers, credentials,
+or arbitrary helper commands in this metadata. The script rejects those fields
+and unsafe command characters. It checks file existence without reading the
+credential file and reconstructs the repository's existing header helper command.
+
+The result is a versioned source under
+`.local/plugin-marketplace/profiles/remote/`, retaining the plugin identity,
+presentation assets, and four skills. It uses Codex's native
+`.codex-plugin/plugin.json` and `.mcp.json` format because dynamic
+`http_headers_helper` authentication is not accepted by the portable HTTP schema.
+The public portable artifact remains unchanged. Preparation neither installs the
+profile nor overwrites the local fallback, host configuration, server permissions,
+or pricing data.
+
+Select the returned `source_path` in the existing private marketplace and use the
+supported Codex install/refresh flow. Verify native discovery and a harmless
+remote call before disabling a duplicate standalone MCP entry; retain that entry
+and the prior local profile for rollback. A private remote desktop profile still
+depends on this PC's original credential file, Node, and gcloud sign-in. It is not
+a credential-free portable web/mobile connection. If Google requests
+reauthentication, refresh only the configured existing account with
+`gcloud auth login <configured-account> --no-activate`, then reconnect.
 
 ## Pricing workflow
 

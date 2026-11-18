@@ -26,6 +26,15 @@ export async function validatePlugin(root) {
   assert.equal(presentation.category, 'Business & Operations');
   assert(Array.isArray(presentation.capabilities));
   assert(Array.isArray(presentation.defaultPrompt) && presentation.defaultPrompt.length <= 3);
+  const icons = new Set([presentation.logo, presentation.composerIcon, presentation.logoDark, presentation.composerIconDark].filter(value => value !== undefined));
+  for (const icon of icons) {
+    assert(typeof icon === 'string' && /^\.\/assets\/[a-z0-9-]+\.png$/.test(icon), 'Icon must be a contained PNG asset');
+    const bytes = await readFile(join(root, icon));
+    assert(bytes.length >= 24 && bytes.length <= 5 * 1024 * 1024, 'Invalid icon size');
+    assert(bytes.subarray(0, 8).equals(Buffer.from([137, 80, 78, 71, 13, 10, 26, 10])), 'Icon must contain PNG data');
+    const width = bytes.readUInt32BE(16), height = bytes.readUInt32BE(20);
+    assert(width === height && width >= 48 && width <= 4096, 'Icon must be square and 48–4096 pixels');
+  }
   const mcp = JSON.parse(await readFile(join(root, 'mcp.json'), 'utf8'));
   assert.equal(mcp.$schema, 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json');
   assert.deepEqual(Object.keys(mcp.mcpServers), ['plytix-catalog']);
@@ -54,7 +63,7 @@ export async function validatePlugin(root) {
     assert(typeof data.description === 'string' && data.description.trim());
     assert(!names.has(data.name)); names.add(data.name);
   }
-  const allowed = new Set(['plugin.json', 'mcp.json', 'server/index.mjs', 'ui/workspace.html', 'LICENSE', 'README.md', ...skills]);
+  const allowed = new Set(['plugin.json', 'mcp.json', 'server/index.mjs', 'ui/workspace.html', 'LICENSE', 'README.md', ...skills, ...[...icons].map(icon => icon.slice(2))]);
   assert.deepEqual(files.filter(name => !allowed.has(name)), [], 'Unexpected archive files');
   return { files: files.length, skills: skills.length };
 }

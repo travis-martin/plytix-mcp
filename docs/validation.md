@@ -1,5 +1,30 @@
 # Validation
 
+## Version 0.13.1 — November 18, 2026
+
+- Typecheck, build and all 475 fixture tests across 38 files passed. Portable
+  package validation and isolated startup passed with 11 files, four skills,
+  52 default tools and the workspace resource; fixture networking was disabled.
+- The remote loading failure was traced to Google Cloud explicitly requiring
+  reauthentication. Private helper configuration passed; the token command
+  failed before MCP initialization. After the existing account was refreshed,
+  a fresh client initialized the deployed v0.13.0 server, discovered 76 tools,
+  and read protected pricing guidance successfully.
+- Known reauthentication failures now produce a fixed actionable message.
+  Fixture checks ensure raw subprocess output, credentials and account values
+  are not exposed, and unrelated errors retain the generic message.
+- The plugin is named **Plytix Studio** and uses the unchanged 256-pixel PNG
+  embedded in the user-supplied ICO as its logo and composer icon. Package
+  validation checks referenced image containment, format, size and dimensions.
+- A private native Codex profile reuses the existing remote endpoint and header
+  helper. Native `plugin/read` verified installation, enablement, resolved icons,
+  four skills and the MCP server. The installed profile independently passed
+  remote discovery, host-mode/24-write-tool checks and GCS guidance readback.
+- The duplicate standalone entry was disabled and retained for rollback. Prior
+  local packages, connection settings and pricing data were preserved. The
+  cloud service was not redeployed; client package v0.13.1 connects to deployed
+  server v0.13.0. No product writes were used for verification.
+
 ## Version 0.12.0 — November 5, 2026
 
 - Typecheck, build, all 448 fixture tests across 36 files, portable package

@@ -32,7 +32,7 @@ if (localBackup) {
   manifest.version = `${manifest.version.split('+')[0]}+local-backup.1`;
   manifest.description = 'Local fallback for Plytix catalog and pricing workflows on this PC. Uses local pricing files that are separate from remote storage.';
   const presentation = manifest.extensions['com.openai'].interface;
-  presentation.displayName = 'Plytix Catalog (Local Backup)';
+  presentation.displayName = `${presentation.displayName} (Local Backup)`;
   presentation.shortDescription = 'Local fallback on this PC';
   presentation.longDescription = 'Run Plytix catalog and pricing workflows locally on this PC. Local pricing guidance, rules and review records are separate from remote storage and do not synchronize automatically. Use the remote connection for shared remote guidance.';
   await writeFile(join(target, 'plugin.json'), JSON.stringify(manifest, null, 2) + '\n');

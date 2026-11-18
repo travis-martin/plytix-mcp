@@ -75,6 +75,27 @@ it('sanitizes child process errors including captured credentials and command ou
   await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in\.$/);
 });
 
+it.each(['Reauthentication required.', 'Reauthentication is required.', 'reauth related error (invalid_rapt)'])('reports an actionable fixed reauthentication error without exposing subprocess details (%s)', async marker => {
+  const output = { write: vi.fn() }, errors = { write: vi.fn() };
+  const execute = vi.fn().mockRejectedValue(Object.assign(new Error('fixture-password'), {
+    code: 1, stderr: `${marker} fixture@example.test fixture-password fixture.payload.signature`, stdout: 'fixture-key',
+  }));
+  const args = ['--env-file', options.envFile, '--account', options.account, '--gcloud', options.gcloud];
+  expect(await main(args, output, errors, execute)).toBe(1);
+  expect(output.write).not.toHaveBeenCalled();
+  expect(errors.write).toHaveBeenCalledExactlyOnceWith('Google Cloud requires reauthentication. Privately run gcloud auth login <configured-account> --no-activate, then reconnect Plytix.\n');
+  expect(JSON.stringify(errors.write.mock.calls)).not.toMatch(/fixture-password|fixture-key|fixture@example|fixture\.payload/);
+});
+
+it.each([
+  { stderr: 'invalid_grant: unrelated credential failure', killed: false },
+  { stderr: 'Reauthentication required.', killed: true },
+  { stderr: 'Reauthentication disabled by configuration', killed: false },
+])('keeps other subprocess failures generic instead of guessing a reauthentication cause (%j)', async details => {
+  const execute = vi.fn().mockRejectedValue(Object.assign(new Error('private-error'), details));
+  await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in\.$/);
+});
+
 it('fails closed for unsafe/missing credentials without starting the subprocess', async () => {
   await writeFile(options.envFile, 'MCP_AUTH_TOKEN=short\nPLYTIX_API_KEY=fixture-key\nPLYTIX_API_PASSWORD="fixture-password\\nInjected: header"\n');
   const execute = vi.fn();

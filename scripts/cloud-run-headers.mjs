@@ -10,8 +10,20 @@ import { parse } from 'dotenv';
 
 const executeFile = promisify(execFile);
 const SAFE_FAILURE = 'Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in.';
+const REAUTH_FAILURE = 'Google Cloud requires reauthentication. Privately run gcloud auth login <configured-account> --no-activate, then reconnect Plytix.';
 const ACCOUNT = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}@[a-zA-Z0-9][a-zA-Z0-9.-]{0,190}$/;
 const FIELDS = ['MCP_AUTH_TOKEN', 'PLYTIX_API_KEY', 'PLYTIX_API_PASSWORD'];
+
+class ReauthenticationRequired extends Error {
+  constructor() { super(REAUTH_FAILURE); }
+}
+
+function requiresReauthentication(error) {
+  // Inspect bounded private stderr only to select a fixed message. A timeout,
+  // generic invalid_grant, or malformed token is not proof of required reauth.
+  return !error?.killed && typeof error?.stderr === 'string' &&
+    /\breauthentication (?:is )?required\b|\binvalid_rapt\b/i.test(error.stderr.slice(0, 64 * 1024));
+}
 
 export function parseHelperArgs(args, platform = process.platform) {
   try {
@@ -81,18 +93,21 @@ export async function produceHelperOutput(options, execute = executeFile) {
     const token = stdout.trim();
     if (token.length > 16000 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) throw new Error();
     return { Authorization: `Bearer ${token}`, ...headers };
-  } catch { throw new Error(SAFE_FAILURE); }
+  } catch (error) {
+    if (requiresReauthentication(error)) throw new ReauthenticationRequired();
+    throw new Error(SAFE_FAILURE);
+  }
 }
 
-export async function main(args, output = process.stdout, errors = process.stderr) {
+export async function main(args, output = process.stdout, errors = process.stderr, execute = executeFile) {
   try {
-    const result = await produceHelperOutput(parseHelperArgs(args));
+    const result = await produceHelperOutput(parseHelperArgs(args), execute);
     output.write(JSON.stringify(result) + '\n');
     return 0;
-  } catch {
+  } catch (error) {
     // Never include subprocess stderr, stdout, arguments or parsed config values.
     if (args.includes('--check')) output.write(JSON.stringify({ configuration_valid: false, token_acquisition_attempted: false }) + '\n');
-    else errors.write(SAFE_FAILURE + '\n');
+    else errors.write((error instanceof ReauthenticationRequired ? REAUTH_FAILURE : SAFE_FAILURE) + '\n');
     return 1;
   }
 }

@@ -1,6 +1,6 @@
 {
   "name": "plytix-local",
-  "interface": { "displayName": "Plytix Local" },
+  "interface": { "displayName": "Plytix" },
   "plugins": [{
     "name": "plytix-catalog",
     "source": { "source": "local", "path": "./plugins/plytix-catalog" },
