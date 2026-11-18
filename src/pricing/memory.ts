@@ -38,6 +38,8 @@ const entry = z.object({
   pending: z.object({ value: memoryValue, evidence: evidenceRecord }).strict().optional(),
 }).strict();
 export type MemoryEntry = z.infer<typeof entry>;
+/** Shared validation for offline portable exports; does not expose storage access. */
+export const memoryEntrySchema = entry;
 const documentSchema = z.object({
   version: z.literal(1), revision: z.number().int().nonnegative(), updated_at: z.string(),
   entries: z.array(entry).max(PRICING_MEMORY_LIMIT),

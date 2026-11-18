@@ -16,12 +16,14 @@
   "main": "dist/index.js",
   "bin": {
     "plytix-mcp": "dist/index.js",
-    "plytix-knowledge-admin": "dist/knowledge/admin.js"
+    "plytix-knowledge-admin": "dist/knowledge/admin.js",
+    "plytix-pricing-export": "dist/pricing/export-cli.js"
   },
   "files": [
     "dist/",
     "README.md",
     "docs/knowledge.md",
+    "docs/portable-knowledge.md",
     "docs/security.md",
     "docs/api-coverage.md",
     "LICENSE"
@@ -41,7 +43,8 @@
     "test:watch": "vitest",
     "test:live:read": "npm run build && node scripts/live-read-smoke.mjs",
     "test:all": "npm run typecheck && npm run build && npm test",
-    "knowledge:admin": "tsx src/knowledge/admin.ts"
+    "knowledge:admin": "tsx src/knowledge/admin.ts",
+    "pricing:export": "node dist/pricing/export-cli.js"
   },
   "engines": {
     "node": ">=22"

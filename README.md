@@ -47,6 +47,11 @@ decisions and execution audits stay credential-private. Local and remote servers
 do not synchronize merely by running the same version. See
 [persistent pricing workspaces](docs/pricing-storage.md).
 
+For another AI platform, export the organization guidance as self-contained
+Markdown and JSON using the offline `plytix-pricing-export` command. It preserves
+scope, status, provenance and exclusions while explaining the limits of a copied
+snapshot. See [portable organization knowledge](docs/portable-knowledge.md).
+
 Version 0.13.0 provides 52 default read/draft tools and 25 separately allowlisted
 write tools (77 total when all catalog/pricing writes are enabled). Default form
 mode requires the supported approval integration; private operator connections
