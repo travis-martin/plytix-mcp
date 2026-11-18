@@ -4,7 +4,8 @@ import type { PlytixClient } from '../client.js';
 import { PlytixError, type PlytixProduct, type PlytixResult } from '../types.js';
 import { createPricingStore, type PricingStore } from './store.js';
 import { applyInput, changeSchema, importInput, planInput, PRICING_LIMITS, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
-import { calculate, parseCsv, withinChangeLimit } from './calculate.js';
+import { assertReusableCostRules, calculate, calculateWithTrace, calculationAttributes, parseCsv, sameFullItemBasis, withinChangeLimit } from './calculate.js';
+import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority } from './provenance.js';
 import { reviewBinding, reviewDocument } from './review-model.js';
 import { PricingMemory } from './memory.js';
 import { learnImport, learnPlan } from './learning.js';
@@ -76,7 +77,11 @@ export class PricingService {
     return this.storeFactory(this.client.knowledgeFingerprint(), this.root);
   }
   private parseRules(value: unknown | undefined) {
-    try { return rulesDocument.parse(value ?? { revision: 0, updated_at: '', rules: [] }); }
+    try {
+      const parsed = rulesDocument.parse(value ?? { revision: 0, updated_at: '', rules: [] });
+      assertRecordProvenance(parsed.record_provenance, parsed.rules.map(value => ({ key: `rule:${value.id}`, value })), parsed.revision);
+      return parsed;
+    }
     catch { return fail('Pricing rules could not be read or validated'); }
   }
   private async readRules(directory: PricingStore) { return this.parseRules(await directory.read('rules.json')); }
@@ -85,7 +90,7 @@ export class PricingService {
     const directory = await this.directory();
     const rules = await this.readRules(directory);
     const learning = rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
-    return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null,
+    return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null, provenance_authority: provenanceAuthority,
       sharing: `${directory.scope?.guidance ?? 'Pricing files are private to this credential pair.'} Rules never authorize writes.` };
   }
   async rulesSave(input: z.infer<typeof rulesInput>) {
@@ -102,7 +107,16 @@ export class PricingService {
     const directory = await this.directory();
     const next = await directory.update('rules.json', value => this.parseRules(value), previous => {
       if (previous.revision !== input.expected_revision) fail('Pricing rules changed; review the latest revision');
-      return rulesDocument.parse({ revision: previous.revision + 1, updated_at: new Date().toISOString(), rules: input.rules,
+      // Preserve readable legacy rules/history without promoting fixed stock-size
+      // multipliers into new reusable supplier-cost calculations.
+      assertReusableCostRules(input.rules, previous.rules);
+      const at = new Date().toISOString();
+      return rulesDocument.parse({ revision: previous.revision + 1, updated_at: at, rules: input.rules,
+        record_provenance: appendRecordProvenance(previous.record_provenance, {
+          before: previous.rules.map(value => ({ key: `rule:${value.id}`, value })),
+          after: input.rules.map(value => ({ key: `rule:${value.id}`, value })), at, revision: previous.revision + 1,
+          operation: 'user_save', review: input.review, review_keys: [...new Set([...previous.rules, ...input.rules].map(rule => `rule:${rule.id}`))],
+        }),
         history: [...previous.history, ...(previous.revision ? [{ revision: previous.revision, updated_at: previous.updated_at, rules: previous.rules }] : [])] });
     });
     // The immutable revision copy preserves reviewed rules for later audits.
@@ -111,7 +125,7 @@ export class PricingService {
     catch { warnings.push('Rules and history were saved atomically, but the extra immutable revision copy is unavailable. Review rules.json before retrying.'); }
     const learning = await this.learnSafely(() => new PricingMemory(directory).recordRules(next.rules, next.revision));
     if (learning.status === 'unavailable') warnings.push('Rules were saved, but their advisory dictionary index could not be updated.');
-    return { ...next, learning, ...(warnings.length ? { partial: true, warning: warnings.join(' ') } : {}) };
+    return { ...next, learning, provenance_authority: provenanceAuthority, ...(warnings.length ? { partial: true, warning: warnings.join(' ') } : {}) };
   }
   private async learnSafely(work: () => Promise<object>) {
     try { return { status: 'stored' as const, ...await work() }; }
@@ -205,7 +219,10 @@ export class PricingService {
     const evidence: Record<string, unknown> = {};
     const stockFields = stockLabels.filter(label => family.data.some(a => a.label === label) || valueOf(product, label) !== undefined);
     for (const label of stockFields) evidence[label] = valueOf(product, label) ?? null;
-    const requiredLabels = new Set([...rule.review_attributes, ...rule.associations.map(a => a.attribute), ...rule.conditions.filter(c => c.source === 'product').map(c => c.field)]);
+    const calculationLabels = calculationAttributes(rule);
+    if (calculationLabels.some(label => family.data.filter(attribute => attribute.label === label).length !== 1))
+      fail('Full-item calculation attribute is missing or ambiguous in the current family');
+    const requiredLabels = new Set([...rule.review_attributes, ...calculationLabels, ...rule.associations.map(a => a.attribute), ...rule.conditions.filter(c => c.source === 'product').map(c => c.field)]);
     for (const label of requiredLabels) {
       evidence[label] = valueOf(product, label);
       if (evidence[label] === undefined || evidence[label] === null) fail('A required review or restriction attribute is unavailable');
@@ -224,11 +241,12 @@ export class PricingService {
     const oldValue = valueOf(product, rule.target_attribute);
     if (typeof oldValue !== 'number' || !Number.isFinite(oldValue) || oldValue < 0) fail('Existing numeric value is missing or invalid; initial value creation needs separate review');
     if (rule.expected_existing_column && (!/^-?\d{1,12}(?:\.\d{1,6})?$/.test(row.values[rule.expected_existing_column] ?? '') || Number(row.values[rule.expected_existing_column]) !== oldValue)) fail('Existing value does not match the document verification column');
-    const calculatedValue = calculate(rule, row);
+    const calculation = calculateWithTrace(rule, row, product);
+    const calculatedValue = calculation.value;
     const manuallyModified = mapping.proposed_value !== undefined;
     if (manuallyModified && !mapping.review_note?.trim()) fail('A manual proposed value requires a review note');
     const newValue = manuallyModified
-      ? calculate({ ...rule, source_column: 'reviewed_proposed_value', operations: [] }, { source_ref: row.source_ref, values: { reviewed_proposed_value: mapping.proposed_value! } })
+      ? calculate({ ...rule, full_item_cost: undefined, source_column: 'reviewed_proposed_value', operations: [] }, { source_ref: row.source_ref, values: { reviewed_proposed_value: mapping.proposed_value! } })
       : calculatedValue;
     if (manuallyModified && newValue !== Number(mapping.proposed_value)) fail('Manual proposed value exceeds the reviewed rounding precision');
     if (schema.type_class === 'IntegerAttribute' && !Number.isInteger(newValue)) fail('Calculated amount is not an integer');
@@ -264,9 +282,13 @@ export class PricingService {
         const ownerGroup = materialGroup(product, rule);
         if (!overridden && ownerGroup && materialGroup(child, rule)?.key !== ownerGroup.key) fail('Inherited descendant has a different material, supplier or raw-stock cost basis');
         for (const label of requiredLabels) {
-          childEvidence[label] = valueOf(child, label);
+          childEvidence[label] = valueOf(child, label) ?? null;
+          if (overridden && calculationLabels.includes(label) && !rule.review_attributes.includes(label) &&
+              !rule.associations.some(a => a.attribute === label) && !rule.conditions.some(c => c.source === 'product' && c.field === label)) continue;
           if (childEvidence[label] === undefined || childEvidence[label] === null) fail('Descendant review attribute is unavailable');
         }
+        if (!overridden && rule.full_item_cost && !sameFullItemBasis(calculation.trace, calculateWithTrace(rule, row, child).trace))
+          fail('Inherited descendant has a different full-item calculation basis');
         for (const condition of rule.conditions.filter(c => c.source === 'product')) {
           const observed = valueOf(child, condition.field);
           const included = (typeof observed === 'string' || typeof observed === 'number') && condition.values.includes(String(observed));
@@ -283,6 +305,7 @@ export class PricingService {
     }
     return { row_index: mapping.row_index, product_id: product.id, sku: product.sku!, family_id: mapping.family_id, attribute: rule.target_attribute, old_value: oldValue, new_value: newValue,
       ...(manuallyModified ? { calculated_value: calculatedValue } : {}), ...(mapping.review_note ? { review_note: mapping.review_note } : {}),
+      ...(calculation.trace ? { calculation_trace: calculation.trace } : {}),
       currency: rule.currency, unit: rule.unit, rule_id: rule.id, source_ref: row.source_ref, inheritance_level: level!, descendant_impact: descendantImpact, review_evidence: evidence,
       ...(materialGroup(product, rule) ? { material_group: materialGroup(product, rule) } : {}),
       evidence_digest: digest({ product_type: product.product_type, parent: product._parent_id, ownerAncestry, descendants: product.num_variations, overwritten: product.overwritten_attributes, attribute, schema, evidence, oldValue }) };

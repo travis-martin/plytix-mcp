@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { guidanceDocument } from './guidance.js';
 import { memoryEntrySchema, PRICING_MEMORY_LIMIT, type MemoryEntry } from './memory.js';
 import { rulesDocument } from './model.js';
+import { assertRecordProvenance, recordProvenanceSchema, provenanceAuthority, type RecordProvenance } from './provenance.js';
 
 const timestamp = z.string().datetime({ offset: true });
 const revision = z.number().int().nonnegative();
@@ -20,6 +21,7 @@ const dictionaryRead = z.object({
   total: revision.max(PRICING_MEMORY_LIMIT), matched: revision.max(PRICING_MEMORY_LIMIT),
   page: z.number().int().min(1), page_size: z.number().int().min(1).max(100), has_more: z.boolean(),
   retained_history_revisions: revision,
+  record_provenance: recordProvenanceSchema.optional(),
 });
 const rulesRead = rulesDocument.extend(stored).strip();
 
@@ -101,6 +103,13 @@ function buildDocument(input: PortableExportInput) {
     .map(raw => readEnvelope(raw, 'pricing_dictionary_get'));
   const pages = pageEnvelopes.map(page => dictionaryRead.parse(page.data)).sort((a, b) => a.page - b.page);
   const first = pages[0];
+  assertRecordProvenance(workflow.record_provenance, [
+    ...workflow.instructions.map(value => ({ key: `instruction:${value.id}`, value })),
+    ...workflow.exclusions.map(value => ({ key: `exclusion:${value.id}`, value })),
+  ], workflow.revision);
+  assertRecordProvenance(rules.record_provenance, rules.rules.map(value => ({ key: `rule:${value.id}`, value })), rules.revision);
+  for (const page of pages) assertRecordProvenance(page.record_provenance,
+    page.entries.map(value => ({ key: `dictionary:${value.id}`, value })), page.revision);
   for (const item of [rules, ...pages]) {
     requireValue(item.storage_scope.workspace_id === workflow.storage_scope.workspace_id && item.storage_backend === workflow.storage_backend,
       'Export sources must share the same organization workspace and storage backend');
@@ -116,6 +125,13 @@ function buildDocument(input: PortableExportInput) {
   }
   requireValue(pages.length === Math.max(1, Math.ceil(first.total / first.page_size)), 'Dictionary capture is missing pages');
   const entries = pages.flatMap(page => page.entries);
+  const provenancePages = pages.map(page => page.record_provenance);
+  requireValue(provenancePages.every(page => Boolean(page) === Boolean(provenancePages[0]) &&
+    page?.omitted_records === provenancePages[0]?.omitted_records), 'Dictionary provenance changed between pages');
+  const dictionaryProvenance = provenancePages[0] ? recordProvenanceSchema.parse({ version: 1,
+    omitted_records: provenancePages[0].omitted_records,
+    records: Object.assign({}, ...provenancePages.map(page => page?.records ?? {})),
+  }) : undefined;
   uniqueIds(entries, 'dictionary');
   uniqueIds(workflow.instructions, 'workflow instructions');
   uniqueIds(workflow.exclusions, 'workflow exclusions');
@@ -146,6 +162,14 @@ function buildDocument(input: PortableExportInput) {
   if (knowledgeStatus?.configured === false) warnings.push('The separate general catalog knowledge workspace was reported unconfigured. This export covers pricing guidance, pricing dictionary and saved pricing rules only.');
   if (knowledgeStatus?.configured === true) warnings.push('The separate general catalog knowledge workspace is configured but is not included in this pricing export.');
   if (knowledgeStatus === undefined) warnings.push('The separate general catalog knowledge workspace was not checked or included.');
+  const currentRecordKeys = [
+    ...workflow.instructions.map(item => [`instruction:${item.id}`, workflow.record_provenance] as const),
+    ...workflow.exclusions.map(item => [`exclusion:${item.id}`, workflow.record_provenance] as const),
+    ...entries.map(item => [`dictionary:${item.id}`, dictionaryProvenance] as const),
+    ...rules.rules.map(item => [`rule:${item.id}`, rules.record_provenance] as const),
+  ];
+  const untracked = currentRecordKeys.filter(([key, provenance]) => !provenance?.records[key]).length;
+  if (untracked) warnings.push(`${untracked} current records lack structured per-record history; legacy review identities and change times remain unknown.`);
 
   const payload = {
     format: 'organization-pricing-knowledge', schema_version: 1,
@@ -155,7 +179,8 @@ function buildDocument(input: PortableExportInput) {
       pricing_records: 'complete_current_records_in_supplied_responses', catalog_facts_verified: false,
       transactional_snapshot: false, general_catalog_knowledge: knowledgeStatus?.configured === false ? 'not_configured' : 'not_included',
       omitted: ['source documents', 'product snapshots', 'private imports, plans, reviews and execution audits',
-        'workflow and dictionary correction-history contents', 'credentials, membership bindings and permissions'],
+        'legacy workflow and dictionary document-level correction-history contents', 'deleted/pruned dictionary record histories',
+        'credentials, membership bindings and permissions'],
     },
     source: {
       backend: workflow.storage_backend,
@@ -167,16 +192,127 @@ function buildDocument(input: PortableExportInput) {
     },
     usage, exclusion_semantics: exclusionSemantics,
     provenance_notes: notes, warnings,
-    workflow: { instructions: workflow.instructions, exclusions: workflow.exclusions },
-    dictionary: { entries },
-    calculation_rules: { current: rules.rules, history_not_active: rules.history },
+    workflow: { instructions: workflow.instructions, exclusions: workflow.exclusions,
+      ...(workflow.record_provenance ? { record_provenance: workflow.record_provenance } : {}) },
+    dictionary: { entries, ...(dictionaryProvenance ? { record_provenance: dictionaryProvenance } : {}) },
+    calculation_rules: { current: rules.rules, history_not_active: rules.history,
+      ...(rules.record_provenance ? { record_provenance: rules.record_provenance } : {}) },
   };
   const document = { ...payload, integrity: { algorithm: 'SHA-256', canonicalization: 'UTF-8 JSON with recursively lexicographically sorted object keys; undefined object fields omitted; array order preserved; no whitespace',
     scope: 'All document fields except integrity', sha256: portableContentDigest(payload), proves: 'Content integrity only; not authenticity, approval, completeness of organization knowledge or current accuracy' } };
   return document;
 }
 
-type ExportDocument = ReturnType<typeof buildDocument>;
+export type ExportDocument = ReturnType<typeof buildDocument> & { lineage?: ExportLineage };
+export interface PortableRecordChange {
+  section: 'instructions' | 'exclusions' | 'dictionary' | 'rules';
+  id: string;
+  change: 'added' | 'changed' | 'retired' | 'removed';
+  before?: unknown;
+  after?: unknown;
+}
+export interface ExportLineage {
+  predecessor_sha256: string;
+  predecessor_captured_at: string;
+  predecessor_revisions: { workflow: number; dictionary: number; rules: number };
+  changes: PortableRecordChange[];
+}
+const integritySchema = z.object({ algorithm: z.literal('SHA-256'), canonicalization: z.string(), scope: z.literal('All document fields except integrity'),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/), proves: z.string() }).strict();
+const lineageSchema = z.object({ predecessor_sha256: z.string().regex(/^[a-f0-9]{64}$/), predecessor_captured_at: timestamp,
+  predecessor_revisions: z.object({ workflow: revision, dictionary: revision, rules: revision }).strict(),
+  changes: z.array(z.object({ section: z.enum(['instructions', 'exclusions', 'dictionary', 'rules']), id: z.string(),
+    change: z.enum(['added', 'changed', 'retired', 'removed']), before: z.unknown().optional(), after: z.unknown().optional() }).strict()).max(1000),
+}).strict();
+
+/** Verify the complete raw payload before parsing. A checksum is not approval or authenticity. */
+export function verifyPortableExport(input: unknown): ExportDocument {
+  const raw = z.record(z.string(), z.unknown()).parse(input);
+  const integrity = integritySchema.parse(raw.integrity);
+  const { integrity: _integrity, ...payload } = raw;
+  requireValue(portableContentDigest(payload) === integrity.sha256, 'Portable export checksum mismatch');
+  const parsed = z.object({
+    format: z.literal('organization-pricing-knowledge'), schema_version: z.literal(1),
+    organization: z.object({ display_name: z.string().min(1).max(200), workspace_id: z.string().min(1).max(200) }).strict(),
+    captured_at: timestamp,
+    coverage: z.object({ pricing_records: z.literal('complete_current_records_in_supplied_responses'), catalog_facts_verified: z.literal(false),
+      transactional_snapshot: z.literal(false), general_catalog_knowledge: z.enum(['not_configured', 'not_included']), omitted: z.array(z.string()).max(20) }).strict(),
+    source: z.object({ backend: z.enum(['file', 'gcs']),
+      workflow: z.object({ revision, updated_at: z.string(), digest: z.string().regex(/^[a-f0-9]{64}$/), read_at: timestamp, retained_history_revisions: revision }).strict(),
+      dictionary: z.object({ revision, updated_at: z.string(), read_at: z.array(timestamp).min(1).max(PRICING_MEMORY_LIMIT), total: revision.max(PRICING_MEMORY_LIMIT), retained_history_revisions: revision }).strict(),
+      rules: z.object({ revision, updated_at: z.string(), read_at: timestamp }).strict(),
+    }).strict(),
+    usage: z.array(z.string()).max(20), exclusion_semantics: z.array(z.string()).max(20),
+    provenance_notes: z.array(z.string()).max(20), warnings: z.array(z.string()).max(20),
+    workflow: z.object({ instructions: guidanceDocument.shape.instructions, exclusions: guidanceDocument.shape.exclusions, record_provenance: recordProvenanceSchema.optional() }).strict(),
+    dictionary: z.object({ entries: z.array(memoryEntrySchema).max(PRICING_MEMORY_LIMIT), record_provenance: recordProvenanceSchema.optional() }).strict(),
+    calculation_rules: z.object({ current: rulesDocument.shape.rules, history_not_active: rulesDocument.shape.history, record_provenance: recordProvenanceSchema.optional() }).strict(),
+    lineage: lineageSchema.optional(), integrity: integritySchema,
+  }).strict().parse(raw);
+  uniqueIds(parsed.workflow.instructions, 'workflow instructions'); uniqueIds(parsed.workflow.exclusions, 'workflow exclusions');
+  uniqueIds(parsed.dictionary.entries, 'dictionary'); uniqueIds(parsed.calculation_rules.current, 'current rules');
+  requireValue(parsed.dictionary.entries.length === parsed.source.dictionary.total, 'Portable dictionary count mismatch');
+  assertRecordProvenance(parsed.workflow.record_provenance, [
+    ...parsed.workflow.instructions.map(value => ({ key: `instruction:${value.id}`, value })),
+    ...parsed.workflow.exclusions.map(value => ({ key: `exclusion:${value.id}`, value })),
+  ], parsed.source.workflow.revision);
+  assertRecordProvenance(parsed.dictionary.record_provenance,
+    parsed.dictionary.entries.map(value => ({ key: `dictionary:${value.id}`, value })), parsed.source.dictionary.revision);
+  assertRecordProvenance(parsed.calculation_rules.record_provenance,
+    parsed.calculation_rules.current.map(value => ({ key: `rule:${value.id}`, value })), parsed.source.rules.revision);
+  return parsed;
+}
+
+export function portableRecordChanges(previous: ExportDocument, next: ExportDocument): PortableRecordChange[] {
+  const changes: PortableRecordChange[] = [];
+  const sections = [
+    ['instructions', previous.workflow.instructions, next.workflow.instructions],
+    ['exclusions', previous.workflow.exclusions, next.workflow.exclusions],
+    ['dictionary', previous.dictionary.entries, next.dictionary.entries],
+    ['rules', previous.calculation_rules.current, next.calculation_rules.current],
+  ] as const;
+  for (const [section, before, after] of sections) {
+    const old = new Map<string, { id: string; status?: string }>(before.map(item => [item.id, item]));
+    const current = new Map<string, { id: string; status?: string }>(after.map(item => [item.id, item]));
+    for (const item of before) {
+      const replacement = current.get(item.id);
+      if (!replacement) changes.push({ section, id: item.id, change: 'removed', before: item });
+      else if (portableContentDigest(item) !== portableContentDigest(replacement)) changes.push({ section, id: item.id,
+        change: replacement.status === 'retired' && item.status !== 'retired' ? 'retired' : 'changed', before: item, after: replacement });
+    }
+    for (const item of after) if (!old.has(item.id)) changes.push({ section, id: item.id, change: 'added', after: item });
+  }
+  return changes;
+}
+
+function stableExportContent(document: ExportDocument) {
+  const { integrity: _integrity, captured_at: _captured, lineage: _lineage, source, ...content } = document;
+  const { read_at: _workflowRead, ...workflow } = source.workflow;
+  const { read_at: _dictionaryRead, ...dictionary } = source.dictionary;
+  const { read_at: _rulesRead, ...rules } = source.rules;
+  return { ...content, source: { backend: source.backend, workflow, dictionary, rules } };
+}
+
+/** Refresh immutable exports; response/capture timestamps alone never create a new version. */
+export function refreshPortableExport(previousInput: unknown, capture: unknown) {
+  const previous = verifyPortableExport(previousInput);
+  const next = createPortableExport(capture).document;
+  requireValue(previous.organization.workspace_id === next.organization.workspace_id && previous.source.backend === next.source.backend,
+    'Export refresh cannot change organization or backend');
+  requireValue(Date.parse(next.captured_at) >= Date.parse(previous.captured_at), 'Export refresh predates its predecessor');
+  for (const section of ['workflow', 'dictionary', 'rules'] as const) requireValue(next.source[section].revision >= previous.source[section].revision,
+    'Export refresh would roll back a source revision');
+  const changes = portableRecordChanges(previous, next);
+  if (portableContentDigest(stableExportContent(previous)) === portableContentDigest(stableExportContent(next))) {
+    return { changed: false as const, predecessor_sha256: previous.integrity.sha256, changes, document: null, markdown: null };
+  }
+  const { integrity: _nextIntegrity, ...content } = next;
+  const lineage: ExportLineage = { predecessor_sha256: previous.integrity.sha256, predecessor_captured_at: previous.captured_at,
+    predecessor_revisions: { workflow: previous.source.workflow.revision, dictionary: previous.source.dictionary.revision, rules: previous.source.rules.revision }, changes };
+  const payload = { ...content, lineage };
+  const document: ExportDocument = { ...payload, integrity: { ...next.integrity, sha256: portableContentDigest(payload) } };
+  return { changed: true as const, predecessor_sha256: previous.integrity.sha256, changes, document, markdown: renderMarkdown(document) };
+}
 const escape = (value: string) => value.replace(/[\\`*_{}[\]<>#|]/g, '\\$&');
 const quote = (value: string) => value.split('\n').map(line => `> ${escape(line)}`).join('\n');
 const json = (value: unknown) => {
@@ -188,6 +324,11 @@ const json = (value: unknown) => {
 const scopeText = (value: unknown) => JSON.stringify(value);
 
 function renderMarkdown(doc: ExportDocument): string {
+  const historySummary = (provenance: RecordProvenance | undefined) => provenance ? {
+    omitted_records: provenance.omitted_records,
+    records: Object.fromEntries(Object.entries(provenance.records).map(([key, history]) => [key, { origin: history.origin,
+      dropped_events: history.dropped_events, events: history.events.map(({ before: _before, after: _after, ...event }) => event) }])),
+  } : 'No structured history was returned; legacy details are unknown.';
   const lines = [
     `# ${escape(doc.organization.display_name)} — portable pricing guidance`, '',
     `Organization workspace: ${escape(doc.organization.workspace_id)}. Captured: ${doc.captured_at}. Source backend: ${doc.source.backend}.`, '',
@@ -197,11 +338,16 @@ function renderMarkdown(doc: ExportDocument): string {
     'Before dependent work, identify the applicable organization, family, supplier and source; read every applicable active owner instruction and exclusion; resolve conflicting or missing evidence; inspect live catalog data; then prepare exact changes for the required review.', '',
     '## Source revisions and limitations', '', json({ source: doc.source, coverage: doc.coverage }), '',
     '## Evidence and review warnings', '', ...doc.warnings.map(item => `- ${item}`), '',
+    '## Per-record review and change provenance', '', provenanceAuthority, '',
+    'The receipts below include every returned event time, revision, action, source and reviewer attribution. Full before/after record snapshots are retained in the companion JSON. Deleted/pruned dictionary histories and old document-level histories are outside this export.', '',
+    json({ workflow: historySummary(doc.workflow.record_provenance), dictionary: historySummary(doc.dictionary.record_provenance), rules: historySummary(doc.calculation_rules.record_provenance) }), '',
     '## Supplemental provenance notes', '',
     'These curator-supplied notes supplement the original source strings. They do not change a record, status, approval or original evidence.', '',
     ...(doc.provenance_notes.length ? doc.provenance_notes.map(quote) : ['No supplemental provenance supplied.']), '',
     '## Active owner instructions', '',
   ];
+  if (doc.lineage) lines.splice(lines.indexOf('## Active owner instructions'), 0,
+    '## Export refresh lineage', '', json(doc.lineage), '');
   const instruction = (item: ExportDocument['workflow']['instructions'][number]) => {
     lines.push(`### ${escape(item.title)}`, '',
       `ID: ${escape(item.id)}. Status: ${item.status}. Priority: ${item.priority}. Scope: ${escape(scopeText(item.scope))}.`, '',

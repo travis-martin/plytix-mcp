@@ -1,5 +1,24 @@
 # Validation
 
+## Version 0.14.0 — November 18, 2026
+
+- Typecheck, build and all 530 fixture tests across 42 files passed. New cases
+  cover current-dimension item/length/area calculations, exact unit conversion,
+  mismatches, descendant dimensions, manual full-item edits and legacy rules.
+- Provenance checks cover source changes, review attribution, protected
+  exclusions, immutable histories, lifecycle/content consistency and bounded
+  retention. The 500-record path passes without increasing test timeouts.
+- Portable import/refresh tests cover checksum and revision binding, scope,
+  explicit status decisions, source/reason requirements, changed protections,
+  byte-bounded batches, no-overwrite outputs and CLI draft/prepare/preflight.
+- Plugin build/check and isolated archive startup passed: four skills, 52
+  default tools, fixture credentials and disabled network access.
+- All 78 fixture browser checks passed with no console errors, including review
+  source/reason/reviewer handoff and preservation of the host approval boundary.
+- Canonical organization guidance reconciliation was separately authorized and
+  read back. No product changes were used for validation. This validation record
+  does not claim cloud deployment or live execution of the new code.
+
 ## Version 0.13.1 — November 18, 2026
 
 - Typecheck, build and all 475 fixture tests across 38 files passed. Portable

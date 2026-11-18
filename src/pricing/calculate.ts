@@ -1,5 +1,17 @@
-import { PRICING_LIMITS, type PricingRule, type SourceRow } from './model.js';
-import { PlytixError } from '../types.js';
+import { PRICING_LIMITS, lengthUnit, type PricingChange, type PricingRule, type SourceRow } from './model.js';
+import { PlytixError, type PlytixProduct } from '../types.js';
+import { provenanceDigest } from './provenance.js';
+
+/** Pure shared save/import policy. Only an unchanged rule already in the
+ * destination may retain legacy fixed arithmetic as a reusable definition. */
+export function assertReusableCostRules(incoming: PricingRule[], previous: PricingRule[] = []): void {
+  for (const rule of incoming) {
+    if (!/^supplier_[1-4]_cost$/.test(rule.target_attribute) || previous.some(old => provenanceDigest(old) === provenanceDigest(rule))) continue;
+    if (!rule.full_item_cost) throw new PlytixError('New or changed reusable supplier-cost rules require a full_item_cost basis; keep fixed calculations in a private batch');
+    if (rule.operations.some(operation => operation.role !== 'pricing_adjustment'))
+      throw new PlytixError('Reusable full-item cost operations must declare pricing_adjustment; physical dimensions must come from current product attributes');
+  }
+}
 
 /** Decimal rational arithmetic: no eval, binary rounding, percentages or unit conversion inferred. */
 function fraction(value: string): [bigint, bigint] {
@@ -7,8 +19,71 @@ function fraction(value: string): [bigint, bigint] {
   const [whole, part = ''] = value.split('.');
   return [BigInt(whole + part), 10n ** BigInt(part.length)];
 }
-export function calculate(rule: PricingRule, row: SourceRow): number {
+// Exact micrometres per unit. These are unit definitions, not raw-stock sizes.
+const lengths = { mm: 1000n, cm: 10000n, m: 1000000n, in: 25400n, ft: 304800n } as const;
+const attributeValue = (product: PlytixProduct, label: string) =>
+  Object.prototype.hasOwnProperty.call(product, `attributes.${label}`) ? product[`attributes.${label}`] : product.attributes?.[label];
+
+export function calculationAttributes(rule: PricingRule): string[] {
+  return [...new Set(rule.full_item_cost?.dimensions.flatMap(binding => [binding.product_attribute,
+    ...(binding.product_unit_attribute ? [binding.product_unit_attribute] : [])]) ?? [])];
+}
+
+function positiveDimension(value: unknown): [string, bigint, bigint] {
+  if ((typeof value !== 'number' || !Number.isFinite(value)) && typeof value !== 'string')
+    throw new PlytixError('Current full-item dimension is missing or invalid; clarify the catalog value before pricing');
+  const text = String(value).trim();
+  const [n, d] = fraction(text);
+  if (n <= 0n) throw new PlytixError('Full-item dimensions must be positive');
+  return [text, n, d];
+}
+
+export function calculateWithTrace(rule: PricingRule, row: SourceRow, product?: PlytixProduct): { value: number; trace?: PricingChange['calculation_trace'] } {
   let [n, d] = fraction(row.values[rule.source_column] ?? '');
+  let trace: PricingChange['calculation_trace'];
+  const basis = rule.full_item_cost;
+  if (basis) {
+    if (row.values[basis.price_unit_column] !== basis.price_unit)
+      throw new PlytixError('Source price unit differs from the reviewed full-item basis');
+    if (basis.dimensions.length && !product) throw new PlytixError('Current product dimensions are required for full-item pricing');
+    let quantityN = 1n, quantityD = 1n;
+    const dimensions: NonNullable<PricingChange['calculation_trace']>['dimensions'] = [];
+    for (const binding of basis.dimensions) {
+      const [value, dimensionN, dimensionD] = positiveDimension(attributeValue(product!, binding.product_attribute));
+      const unit = lengthUnit.safeParse(binding.product_unit_attribute ? attributeValue(product!, binding.product_unit_attribute) : binding.product_unit);
+      if (!unit.success) throw new PlytixError('Current full-item dimension unit is missing or unsupported');
+      const dimension: typeof dimensions[number] = { product_attribute: binding.product_attribute, product_value: value,
+        product_unit: unit.data, ...(binding.product_unit_attribute ? { product_unit_attribute: binding.product_unit_attribute } : {}) };
+      if (binding.source) {
+        dimension.source = { ...binding.source };
+        const sourceValue = row.values[binding.source.value_column]?.trim() ?? '';
+        const sourceUnit = row.values[binding.source.unit_column]?.trim() ?? '';
+        if (sourceValue || sourceUnit) {
+          if (!sourceValue || !sourceUnit) throw new PlytixError('Source full-item dimension and unit must be supplied together');
+          const [sourceText, sourceN, sourceD] = positiveDimension(sourceValue);
+          const parsedUnit = lengthUnit.safeParse(sourceUnit);
+          if (!parsedUnit.success) throw new PlytixError('Source full-item dimension unit is unsupported');
+          if (sourceN * lengths[parsedUnit.data] * dimensionD !== dimensionN * lengths[unit.data] * sourceD)
+            throw new PlytixError('Source full-item dimension differs from the current catalog; resolve the mismatch before pricing');
+          dimension.source = { ...binding.source, value: sourceText, unit: parsedUnit.data };
+        }
+      }
+      dimensions.push(dimension);
+      if (basis.price_basis !== 'item') {
+        const priceLengthUnit = basis.price_unit.replace(/2$/, '') as keyof typeof lengths;
+        quantityN *= dimensionN * lengths[unit.data];
+        quantityD *= dimensionD * lengths[priceLengthUnit];
+      }
+    }
+    n *= quantityN; d *= quantityD;
+    // Keep the exact ratio in the review rather than rounding intermediate sizes.
+    const gcd = (a: bigint, b: bigint): bigint => { while (b) [a, b] = [b, a % b]; return a; };
+    const common = gcd(quantityN, quantityD);
+    trace = { source_column: rule.source_column, source_price: row.values[rule.source_column], price_basis: basis.price_basis,
+      price_unit: basis.price_unit, price_unit_column: basis.price_unit_column, dimensions,
+      full_item_quantity: { numerator: String(quantityN / common), denominator: String(quantityD / common) },
+      adjustments: rule.operations.map(operation => ({ ...operation })), decimals: rule.decimals, rounding: 'half_up', rounded_value: 0 };
+  }
   for (const operation of rule.operations) {
     const [on, od] = fraction(operation.operand);
     if (operation.op === 'multiply') { n *= on; d *= od; }
@@ -25,7 +100,22 @@ export function calculate(rule: PricingRule, row: SourceRow): number {
   if (rounded > BigInt(Number.MAX_SAFE_INTEGER)) throw new PlytixError('Calculated amount exceeds exact numeric range');
   const value = Number(rounded) / Number(scale);
   if (!Number.isFinite(value) || value < Number(rule.minimum) || value > Number(rule.maximum)) throw new PlytixError('Calculated amount is outside the reviewed rule range');
-  return value;
+  if (trace) trace.rounded_value = value;
+  return { value, ...(trace ? { trace } : {}) };
+}
+
+export function calculate(rule: PricingRule, row: SourceRow, product?: PlytixProduct): number {
+  return calculateWithTrace(rule, row, product).value;
+}
+
+/** Compare each physical dimension, not just rounded prices or equal areas. */
+export function sameFullItemBasis(left: PricingChange['calculation_trace'], right: PricingChange['calculation_trace']): boolean {
+  if (!left || !right || left.dimensions.length !== right.dimensions.length) return false;
+  return left.dimensions.every((dimension, index) => {
+    const other = right.dimensions[index];
+    const [ln, ld] = fraction(dimension.product_value), [rn, rd] = fraction(other.product_value);
+    return dimension.product_attribute === other.product_attribute && ln * lengths[dimension.product_unit] * rd === rn * lengths[other.product_unit] * ld;
+  });
 }
 
 export function withinChangeLimit(oldValue: number, newValue: number, percent: number): boolean {

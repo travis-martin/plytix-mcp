@@ -1,6 +1,6 @@
 {
   "name": "plytix-mcp",
-  "version": "0.13.1",
+  "version": "0.14.0",
   "type": "module",
   "description": "Read-only by default MCP tools for Plytix product data, schema, assets and relationships.",
   "keywords": [
@@ -17,13 +17,16 @@
   "bin": {
     "plytix-mcp": "dist/index.js",
     "plytix-knowledge-admin": "dist/knowledge/admin.js",
-    "plytix-pricing-export": "dist/pricing/export-cli.js"
+    "plytix-pricing-export": "dist/pricing/export-cli.js",
+    "plytix-pricing-import": "dist/pricing/import-cli.js"
   },
   "files": [
     "dist/",
     "README.md",
     "docs/knowledge.md",
     "docs/portable-knowledge.md",
+    "docs/knowledge-maintenance.md",
+    "docs/pricing-provenance.md",
     "docs/security.md",
     "docs/api-coverage.md",
     "LICENSE"
@@ -44,7 +47,8 @@
     "test:live:read": "npm run build && node scripts/live-read-smoke.mjs",
     "test:all": "npm run typecheck && npm run build && npm test",
     "knowledge:admin": "tsx src/knowledge/admin.ts",
-    "pricing:export": "node dist/pricing/export-cli.js"
+    "pricing:export": "node dist/pricing/export-cli.js",
+    "pricing:import": "node dist/pricing/import-cli.js"
   },
   "engines": {
     "node": ">=22"

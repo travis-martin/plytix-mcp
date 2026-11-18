@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PlytixError, type PlytixProduct } from '../types.js';
 import type { PricingStore } from './store.js';
 import { label } from './model.js';
+import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority, recordProvenanceSchema, reviewMetadataSchema, selectRecordProvenance } from './provenance.js';
 
 const KEY = 'workflow.json';
 const text = z.string().trim().min(1).max(200);
@@ -37,6 +38,7 @@ const guidanceHistory = z.object(snapshotFields).strict();
 export const guidanceDocument = z.object({
   version: z.literal(1), ...snapshotFields,
   history: z.array(guidanceHistory).max(20).default([]),
+  record_provenance: recordProvenanceSchema.optional(),
 }).strict();
 export type GuidanceDocument = z.infer<typeof guidanceDocument>;
 export type GuidanceInstruction = z.infer<typeof guidanceInstruction>;
@@ -49,6 +51,7 @@ export const guidanceSaveInput = z.object({
   expected_revision: z.number().int().nonnegative(),
   instructions: snapshotFields.instructions,
   exclusions: snapshotFields.exclusions,
+  review: reviewMetadataSchema.optional(),
 }).strict();
 
 const normalize = (value: string) => value.trim().toLocaleLowerCase('en-US');
@@ -70,6 +73,10 @@ function parseGuidance(raw: unknown): GuidanceDocument {
   try {
     const parsed = guidanceDocument.parse(raw ?? { version: 1, revision: 0, updated_at: '', instructions: [], exclusions: [], history: [] });
     validateUnique(parsed);
+    assertRecordProvenance(parsed.record_provenance, [
+      ...parsed.instructions.map(value => ({ key: `instruction:${value.id}`, value })),
+      ...parsed.exclusions.map(value => ({ key: `exclusion:${value.id}`, value })),
+    ], parsed.revision);
     return parsed;
   } catch { throw new PlytixError('Pricing workflow guidance could not be read or validated'); }
 }
@@ -135,26 +142,43 @@ export class PricingGuidance {
   read() { return readGuidance(this.store); }
   async get(input: z.input<typeof guidanceGetInput> = {}) {
     const args = guidanceGetInput.parse(input), document = await this.read();
+    const instructions = applicableInstructions(document, args);
+    const exclusions = document.exclusions.filter(item => (args.include_retired || item.status === 'active') && matchesFamilies(item.family_ids, args.family_ids));
     return { version: document.version, revision: document.revision, digest: guidanceDigest(document), updated_at: document.updated_at,
-      instructions: applicableInstructions(document, args),
-      exclusions: document.exclusions.filter(item => (args.include_retired || item.status === 'active') && matchesFamilies(item.family_ids, args.family_ids)),
+      instructions, exclusions,
+      record_provenance: selectRecordProvenance(document.record_provenance, [
+        ...instructions.map(item => `instruction:${item.id}`), ...exclusions.map(item => `exclusion:${item.id}`),
+      ]), provenance_authority: provenanceAuthority,
       retained_history_revisions: document.history.length,
       complete_for_save: args.include_retired && !args.family_ids?.length && !Object.values(args.source_context ?? {}).some(value => value !== undefined), authority };
   }
   async save(input: z.input<typeof guidanceSaveInput>) {
     const args = guidanceSaveInput.parse(input); validateUnique(args);
+    const at = this.clock();
     const updated = await this.store.update(KEY, parseGuidance, current => {
       if (current.revision !== args.expected_revision) throw new PlytixError('Pricing workflow guidance changed; review the latest revision before saving');
       if (current.instructions.some(item => !args.instructions.some(next => next.id === item.id)) ||
           current.exclusions.some(item => !args.exclusions.some(next => next.id === item.id))) {
         throw new PlytixError('Preserve every existing workflow guidance ID; explicitly set status to retired instead of omitting a record');
       }
+      if (!args.review && current.exclusions.some(item => item.status === 'active' &&
+          canonical(item) !== canonical(args.exclusions.find(next => next.id === item.id)))) {
+        throw new PlytixError('Changing or retiring an active pricing exclusion requires review sources and a reason; preserve the protection until the conflict is explicitly resolved');
+      }
       const previous = { revision: current.revision, updated_at: current.updated_at, instructions: current.instructions, exclusions: current.exclusions };
       const history = [...current.history, ...(current.revision ? [previous] : [])].slice(-20);
       // Bound history by bytes as well as revision count; keep current instructions
       // intact. Existing storage separately caps the complete document at 8 MiB.
       while (Buffer.byteLength(JSON.stringify(history), 'utf8') > 2 * 1024 * 1024 && history.length) history.shift();
-      return guidanceDocument.parse({ version: 1, revision: current.revision + 1, updated_at: this.clock(), instructions: args.instructions, exclusions: args.exclusions, history });
+      const keyed = (value: Pick<GuidanceDocument, 'instructions' | 'exclusions'>) => [
+        ...value.instructions.map(item => ({ key: `instruction:${item.id}`, value: item })),
+        ...value.exclusions.map(item => ({ key: `exclusion:${item.id}`, value: item })),
+      ];
+      const record_provenance = appendRecordProvenance(current.record_provenance, {
+        before: keyed(current), after: keyed(args), at, revision: current.revision + 1,
+        operation: 'user_save', review: args.review, review_keys: keyed(args).map(item => item.key),
+      });
+      return guidanceDocument.parse({ version: 1, revision: current.revision + 1, updated_at: at, instructions: args.instructions, exclusions: args.exclusions, history, record_provenance });
     });
     return { ...updated, digest: guidanceDigest(updated), authority };
   }

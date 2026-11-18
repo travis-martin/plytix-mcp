@@ -3,6 +3,7 @@ import type { PlytixClient } from '../client.js';
 import { PlytixError, type PlytixProduct } from '../types.js';
 import type { PricingChange, PricingRule } from './model.js';
 import type { GuidanceDocument } from './guidance.js';
+import { calculationAttributes } from './calculate.js';
 
 export const valueOf = (p: PlytixProduct, label: string): unknown =>
   Object.prototype.hasOwnProperty.call(p, `attributes.${label}`) ? p[`attributes.${label}`] : p.attributes?.[label];
@@ -56,7 +57,7 @@ export class PricingSnapshot {
       const known = new Set(family.data.map(a => a.label));
       const labels = new Set([
         ...stockLabels.filter(label => known.has(label)),
-        ...rules.filter(r => r.family_ids.includes(id)).flatMap(r => [r.target_attribute, ...r.review_attributes,
+        ...rules.filter(r => r.family_ids.includes(id)).flatMap(r => [r.target_attribute, ...r.review_attributes, ...calculationAttributes(r),
           ...r.associations.map(a => a.attribute), ...r.conditions.filter(c => c.source === 'product').map(c => c.field)]),
         ...guidance.exclusions.filter(e => e.status === 'active' && e.family_ids.includes(id)).flatMap(e => e.all.map(c => c.attribute)),
       ]);

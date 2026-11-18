@@ -63,9 +63,45 @@ After applying, use `pricing_review_refresh` or the workspace's Refresh statuses
 
 ## Preserve reviewable learning
 
+Reusable supplier-cost calculations should describe the method and bind current
+dimensions, never encode a prior stock length or area as a permanent multiplier.
+Use `full_item_cost` with item/length/area basis, explicit source price unit/column,
+and live dimension attributes plus their reviewed unit or live unit attribute.
+When document dimensions are supplied, compare them after exact unit conversion.
+Missing catalog dimensions, partial source dimension/unit pairs, unsupported
+units and mismatches block the affected rows for clarification. Do not overwrite
+dimensions to make a calculation fit. Genuine arithmetic adjustments must have
+reviewed evidence and declare `role: pricing_adjustment`; that label is not a way
+to disguise fixed physical sizes. Show the resulting calculation trace.
+
+Family/color protections remain rigid until explicitly resolved. A conflicting
+source price is evidence to present, not permission to bypass an exclusion.
+Hold affected changes, identify the exact rule/source conflict and request
+guidance unless the current user instruction already resolves it. Record the
+reviewed resolution before changing the protection, then re-plan and review the
+actual catalog changes. Never retire protections simply to unblock a batch.
+
 Save an explicit owner request to add or change an enduring instruction or exception with `pricing_guidance_save`. First read the entire current document using `pricing_guidance_get({include_retired: true})` without family or source filters; require `complete_for_save`. Send `expected_revision` and the complete `instructions` and `exclusions` arrays, preserving every existing ID and `source_ref`. Retire obsolete records explicitly rather than omitting them. Use the normal configured write-approval flow and review any weakening or retirement explicitly. Never modify protected guidance merely because automatic learning suggests a different rule. The Dictionary tab's guidance editor can prepare this exact request in the conversation; its request button alone does not approve a save. Confirm the saved revision afterward.
 
 Use scoped text instructions for review requirements and supported structured exclusions for enforceable price protections. Exclusions match explicit family IDs and AND conditions over current scalar attribute values; optional exact target attributes narrow their scope. Do not approximate an unsupported condition or execute free-text code. Keep business-specific exceptions in the configured store, never in reusable plugin source. Automatic source learning belongs in proposed dictionary records and cannot overwrite this protected guidance.
+
+Supply `review: {sources: [{kind, reference, sha256?, observed_at?}], reason,
+reviewer?}` when making an explicit correction. Sources may be user, document,
+Plytix, pricing-rule or other evidence using the tool's enum spelling. Any change
+to an existing active exclusion requires source and reason. Reviewer attribution
+is not authenticated approval. The server keeps per-record before/after history;
+never import replacement histories, invent legacy dates or imply an automatic
+observation was user-reviewed.
+
+For portable imports, use `plytix-pricing-import` draft/prepare/preflight with a
+verified baseline export, editable candidate, fresh full capture and reviewed
+digest. Show the before/requested/proposed diff and explicit status/protection
+changes. Execute only the returned existing-tool calls through normal host
+approval; stop and re-review after any failed or uncertain call. Never write raw
+runtime files to import knowledge. After readback, refresh the portable export
+with `plytix-pricing-export --previous`; retain predecessor lineage and change
+diffs. Copies do not synchronize automatically. See the repository's portable
+knowledge guide for exact capture and CLI syntax.
 
 Use `pricing_rules_save` with `expected_revision` and the complete reviewed rule set through its configured exact approval flow. Record proposed associations, aliases, family mapping evidence, conditions/restrictions, important review attributes, formulas/conversions/rounding, verification tolerances, reviewer/date and source references in supported rule fields. Preserve existing rules and decisions; a one-off exception must not silently become a global rule.
 

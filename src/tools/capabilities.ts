@@ -16,6 +16,8 @@ export function registerCapabilityTools(server: McpServer) {
           pricing: ['pricing_guidance_get', 'pricing_dictionary_get', 'pricing_import', 'pricing_rules_get', 'pricing_plan', 'pricing_plan_get'],
           pricing_storage: 'Persistent local or GCS storage holds reviewable JSON. Explicit PLYTIX_PRICING_SCOPE_BINDINGS share workflow guidance, rules and dictionary across bound credentials using the same backend. Imports, plans, reviews and audits stay credential-private. Without bindings, all files remain credential-private. Hosted ephemeral storage is insufficient.',
           pricing_guidance: 'Required user instructions and enforced pricing exclusions are separate from learned advisory definitions. Read pricing_guidance_get before pricing; edit the complete document using revision-checked pricing_guidance_save. Current Plytix schema, inheritance and values remain authoritative.',
+          pricing_knowledge_maintenance: 'Versioned per-record before/after history records source and review metadata. Active exclusion changes require sources and reason. Offline plytix-pricing-import prepares diffs and fresh-revision preflight for existing approved tools; plytix-pricing-export --previous refreshes immutable exports with lineage. Imported history never replaces canonical history.',
+          full_item_cost: 'Reusable supplier-cost rules use item, length or area bases with explicit price units and live dimension bindings. Provided document dimensions must agree; missing catalog dimensions block dependent pricing. Historical fixed calculations remain historical; family/color protections still apply.',
           guide: 'discovery_guide',
           dictionary: 'catalog_dictionary',
           shared_knowledge: 'knowledge_status',

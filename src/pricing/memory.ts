@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { PlytixError } from '../types.js';
 import type { PricingStore } from './store.js';
 import type { PricingRule } from './model.js';
+import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority, recordProvenanceSchema, reviewMetadataSchema, selectRecordProvenance } from './provenance.js';
 
 const KEY = 'dictionary.json';
 export const PRICING_MEMORY_LIMIT = 500;
@@ -46,6 +47,7 @@ const documentSchema = z.object({
   // Bounded correction history retains exact previous advisory definitions.
   history: z.array(z.object({ revision: z.number().int(), at: z.string().datetime(),
     previous: z.array(entry).max(50) }).strict()).max(20),
+  record_provenance: recordProvenanceSchema.optional(),
 }).strict();
 type MemoryDocument = z.infer<typeof documentSchema>;
 export const memoryGetInput = z.object({
@@ -55,6 +57,7 @@ export const memoryGetInput = z.object({
 }).strict();
 export const memoryUpdateInput = z.object({
   expected_revision: z.number().int().nonnegative(),
+  review: reviewMetadataSchema.optional(),
   entries: z.array(z.object({ value: memoryValue, status: z.enum(['proposed', 'user_defined', 'retired']),
     evidence: memoryEvidence.optional(), note: z.string().trim().min(1).max(1000).optional() }).strict()
     .refine(value => value.status !== 'proposed' || Boolean(value.evidence), 'Proposed definitions require source evidence')).min(1).max(50),
@@ -72,17 +75,20 @@ function idFor(value: MemoryValue) {
   return createHash('sha256').update(canonical({ kind: value.kind, term: normalize(value.term), scope,
     attributes: [...new Set(value.attribute_labels)].sort() })).digest('hex');
 }
+/** Stable dictionary identity for reviewed import validation; no storage access. */
+export const memoryEntryId = idFor;
 function parseDocument(raw: unknown): MemoryDocument {
   try {
     const parsed = documentSchema.parse(raw ?? { version: 1, revision: 0, updated_at: '', entries: [], history: [] });
     if (new Set(parsed.entries.map(item => item.id)).size !== parsed.entries.length || parsed.entries.some(item => item.id !== idFor(item.value))) throw new Error();
+    assertRecordProvenance(parsed.record_provenance, parsed.entries.map(value => ({ key: `dictionary:${value.id}`, value })), parsed.revision);
     return parsed;
   } catch { throw new PlytixError('Pricing dictionary could not be read or validated'); }
 }
+const evidenceIdentity = ({ observed_at: _at, ...evidence }: z.infer<typeof evidenceRecord>) => canonical(evidence);
 function preserveEvidence(records: MemoryEntry['evidence'], next: z.infer<typeof evidenceRecord>, changed = false) {
-  const key = ({ observed_at: _at, ...evidence }: z.infer<typeof evidenceRecord>) => canonical(evidence);
   // Repeat observations of the same source do not grow history or imply a fresh catalog read.
-  if (records.some(record => key(record) === key(next))) return changed ? records.map(record => key(record) === key(next) ? next : record) : records;
+  if (records.some(record => evidenceIdentity(record) === evidenceIdentity(next))) return changed ? records.map(record => evidenceIdentity(record) === evidenceIdentity(next) ? next : record) : records;
   return [...records, next].slice(-4);
 }
 function prune(document: MemoryDocument): number {
@@ -107,10 +113,13 @@ export class PricingMemory {
     const matches = document.entries.filter(item => (args.include_retired || item.status !== 'retired') &&
       Object.entries(args.scope ?? {}).every(([key, value]) => normalize(item.value.scope[key as keyof MemoryValue['scope']] ?? '') === normalize(value)) &&
       (!args.query || normalize([item.value.term, item.value.canonical_term ?? '', item.value.definition].join(' ')).includes(normalize(args.query))));
-    return { revision: document.revision, updated_at: document.updated_at, entries: matches.slice((args.page - 1) * args.page_size, args.page * args.page_size),
+    const entries = matches.slice((args.page - 1) * args.page_size, args.page * args.page_size);
+    return { revision: document.revision, updated_at: document.updated_at, entries,
       total: document.entries.length, matched: matches.length, page: args.page, page_size: args.page_size,
       has_more: args.page * args.page_size < matches.length, retained_history_revisions: document.history.length,
-      advisory, live_validation_required: true as const };
+      advisory, live_validation_required: true as const,
+      record_provenance: selectRecordProvenance(document.record_provenance, entries.map(item => `dictionary:${item.id}`)),
+      provenance_coverage: 'returned_records_only' as const, provenance_authority: provenanceAuthority };
   }
 
   async record(values: MemoryValue[], evidence: MemoryEvidence, state: 'observed' | 'proposed' = 'observed') {
@@ -129,6 +138,7 @@ export class PricingMemory {
     const updated = await this.store.update(KEY, parseDocument, document => {
       saved = 0; conflicts = 0; protectedEntries = 0; pruned = 0; skipped = overflow;
       const before = canonical(document.entries);
+      const beforeEntries = structuredClone(document.entries);
       const existingIds = new Set(document.entries.map(item => item.id));
       // Refresh retained entries before additions. A repeated oversized event must
       // not evict its own entries and churn the dictionary on every read.
@@ -150,7 +160,7 @@ export class PricingMemory {
         const protectedDefinition = current.status === 'user_defined' || (current.status === 'reviewed_rule' && !ruleIndex);
         if (protectedDefinition && !equal(current.value, record.value)) {
           const candidate = { value: record.value, evidence: record.evidence };
-          if (!current.pending || !equal(current.pending.value, record.value) || !equal(current.pending.evidence.reference, record.evidence.reference)) {
+          if (!current.pending || !equal(current.pending.value, record.value) || evidenceIdentity(current.pending.evidence) !== evidenceIdentity(record.evidence)) {
             current.pending = candidate; current.updated_at = at;
           }
           conflicts++; continue;
@@ -171,7 +181,14 @@ export class PricingMemory {
           item.stale_source = true; item.updated_at = at;
         }
       }
-      if (before !== canonical(document.entries)) { document.revision++; document.updated_at = at; }
+      if (before !== canonical(document.entries)) {
+        document.record_provenance = appendRecordProvenance(document.record_provenance, {
+          before: beforeEntries.map(value => ({ key: `dictionary:${value.id}`, value })),
+          after: document.entries.map(value => ({ key: `dictionary:${value.id}`, value })),
+          at, revision: document.revision + 1, operation: ruleIndex ? 'rule_sync' : 'automatic_observation',
+        });
+        document.revision++; document.updated_at = at;
+      }
       return documentSchema.parse(document);
     });
     return { revision: updated.revision, recorded: saved, conflicts, protected: protectedEntries, pruned, skipped,
@@ -186,17 +203,19 @@ export class PricingMemory {
       if (document.revision !== args.expected_revision) throw new PlytixError('Pricing dictionary changed; review the current revision');
       saved = 0; conflicts = 0; protectedEntries = 0;
       const before = canonical(document.entries);
+      const beforeEntries = structuredClone(document.entries);
       const previous: MemoryEntry[] = [];
       for (const correction of args.entries) {
         const id = idFor(correction.value), current = document.entries.find(item => item.id === id);
-        const evidence = correction.status === 'proposed' ? correction.evidence!
-          : { source: 'user' as const, reference: 'Explicit advisory dictionary correction' };
+        // Preserve explicitly supplied evidence for owner corrections too. Review
+        // attribution is separate from the evidence's source or its authority.
+        const evidence = correction.evidence ?? { source: 'user' as const, reference: 'Explicit advisory dictionary correction' };
         const observed = { ...evidence, observed_at: at };
         if (correction.status === 'proposed' && current) {
           if (current.status === 'retired') { protectedEntries++; continue; }
           if (['user_defined', 'reviewed_rule'].includes(current.status)) {
             if (equal(current.value, correction.value)) { protectedEntries++; continue; }
-            if (!current.pending || !equal(current.pending.value, correction.value) || !equal(current.pending.evidence.reference, evidence.reference)) {
+            if (!current.pending || !equal(current.pending.value, correction.value) || evidenceIdentity(current.pending.evidence) !== evidenceIdentity(observed)) {
               previous.push(structuredClone(current)); current.pending = { value: correction.value, evidence: observed }; current.updated_at = at;
             }
             conflicts++; continue;
@@ -210,7 +229,13 @@ export class PricingMemory {
         saved++;
       }
       prune(document);
-      if (before !== canonical(document.entries)) {
+      if (before !== canonical(document.entries) || args.review) {
+        document.record_provenance = appendRecordProvenance(document.record_provenance, {
+          before: beforeEntries.map(value => ({ key: `dictionary:${value.id}`, value })),
+          after: document.entries.map(value => ({ key: `dictionary:${value.id}`, value })),
+          at, revision: document.revision + 1, operation: 'user_save', review: args.review,
+          review_keys: args.entries.map(item => `dictionary:${idFor(item.value)}`),
+        });
         document.history = [...document.history, { revision: document.revision, at, previous }].slice(-20);
         document.revision++; document.updated_at = at;
       }

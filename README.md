@@ -52,6 +52,11 @@ Markdown and JSON using the offline `plytix-pricing-export` command. It preserve
 scope, status, provenance and exclusions while explaining the limits of a copied
 snapshot. See [portable organization knowledge](docs/portable-knowledge.md).
 
+Version 0.14 adds per-record source/review history, reviewed import preparation
+and revision-linked export refreshes. Reusable full-item costing reads current
+dimensions; scoped exclusions remain enforced until a reviewed correction.
+See [knowledge maintenance and compatibility](docs/knowledge-maintenance.md).
+
 Version 0.13.0 provides 52 default read/draft tools and 25 separately allowlisted
 write tools (77 total when all catalog/pricing writes are enabled). Default form
 mode requires the supported approval integration; private operator connections

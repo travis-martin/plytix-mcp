@@ -105,6 +105,58 @@ This is a snapshot of retained pricing guidance, not a full backup or a promise
 that every chat decision was saved. It excludes credential bindings, secrets,
 source documents, private imports/plans/reviews/execution audits and the separate
 general knowledge store. History and advisory retention are bounded upstream.
-Provenance can be incomplete in older records. Recommended next schema work is
-per-record source/reviewer/review dates, explicit supersession, and a reviewed
-import/diff path; the export does not imply those features already exist.
+Per-record sources and review history are available on 0.14 servers; missing
+legacy history stays unknown. See [knowledge maintenance](knowledge-maintenance.md)
+for retention, provenance and calculation-policy compatibility.
+
+## Refresh after canonical changes
+
+Collect a new complete capture using the procedure above, then run:
+
+```powershell
+node dist/pricing/export-cli.js --input .local/fresh-capture.json --previous .local/previous/organization-knowledge.json --output .local/refreshed
+```
+
+The predecessor checksum, workspace/backend and revision direction are checked.
+An unchanged capture creates no new directory. A changed export retains its
+predecessor checksum/revisions and a record diff, without overwriting the old
+files. Changes in read timestamps alone do not count as new knowledge. Refresh
+after successful reviewed imports or corrections; no scheduler or automatic
+cloud-to-local synchronization is implied.
+
+## Review an imported edit
+
+Use installed `plytix-pricing-import` or the checkout entrypoint:
+
+```powershell
+node dist/pricing/import-cli.js --mode draft --baseline .local/current/organization-knowledge.json --output .local/import-draft
+node dist/pricing/import-cli.js --mode prepare --baseline .local/current/organization-knowledge.json --candidate .local/import-draft/import-candidate.json --capture .local/fresh-capture.json --output .local/import-review
+node dist/pricing/import-cli.js --mode preflight --review .local/import-review/reviewed-import.json --reviewed-digest REVIEWED_SHA256 --capture .local/latest-capture.json --output .local/import-preflight
+```
+
+Edit the candidate between draft and prepare. It contains only editable business
+fields tied to the verified baseline checksum. Include review sources and a
+reason. Workflow arrays preserve every existing ID; retire explicitly. Dictionary
+entries are patches, so omissions leave definitions unchanged. Changing a
+dictionary identity requires a new ID and a separately reviewed retirement.
+Rule removals must be named explicitly. New reusable supplier-cost rules must
+satisfy the current full-item calculation policy.
+
+Read `reviewed-import.md`: it shows before, requested and proposed values, exact
+tool arguments, protections, retirements and status decisions. Changed learned
+entries become proposals. Requests for `user_defined` or rule confirmation need
+explicit per-ID decisions and still require normal host approval; copied status
+is not approval. Imported history never replaces canonical history. Review the
+SHA-256 digest printed in the file.
+
+Immediately before saving, collect current records again and preflight that exact
+review digest. A changed baseline requires a fresh candidate/review. Preflight
+produces calls for existing `pricing_guidance_save`, `pricing_dictionary_update`
+and `pricing_rules_save` tools; request those calls through the normal trusted
+host flow in the listed order. The CLI never invokes tools, loads credentials or
+writes runtime stores. Save-time revision checks protect against later changes.
+
+Imports spanning files are not transactional. Stop on failed, partial or uncertain
+responses, read actual results and re-review remaining work. Never replay
+successful or uncertain calls. Rule saves occur last because their learning can
+update the dictionary. Read back the results, then refresh the dated export.

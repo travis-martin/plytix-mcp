@@ -29,12 +29,12 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   }, async (args: z.infer<typeof guidanceGetInput>) => ({ ...json(await guidance.get(args)), resultMetadata: { source: 'local', freshness: 'cached' } }));
   registerTool(server, 'pricing_guidance_save', {
     title: 'Save Protected Pricing Workflow Guidance',
-    description: 'Save the complete user-reviewed instruction/exclusion set at expected_revision. Preserve every existing ID; retire explicitly instead of omitting. Requires this tool allowlist and normal host approval. Use only for explicit owner instructions or corrections; automatic learning belongs in proposed dictionary entries. Changes invalidate prepared pricing plans. Never changes products, grants writes or executes text.',
+    description: 'Save the complete user-reviewed instruction/exclusion set at expected_revision. Preserve every existing ID; retire explicitly instead of omitting. Supply review sources and reason for changes; altering an active exclusion requires them. Conflicting source evidence does not override a protection: resolve with the user first. Server records per-record before/after history; supplied reviewer attribution is not approval. Requires the write allowlist and normal host approval. Changes invalidate plans; never changes products or executes text.',
     inputSchema: guidanceSaveInput.shape,
   }, async (args: z.infer<typeof guidanceSaveInput>) => ({ ...json(await guidance.save(args)), resultMetadata: { source: 'local', freshness: 'not_applicable' } }));
   registerTool(server, 'pricing_dictionary_get', {
     title: 'Read Pricing Workflow Dictionary',
-    description: 'Read private, paged supplier/source/family-scoped terminology, colors, materials, mappings and setup observations. All entries are advisory and require current Plytix validation. No product prices are stored here. Use scope to prevent reusing unrelated supplier meanings.',
+    description: 'Read paged supplier/source/family-scoped terminology, mappings and setup observations with source and per-record change/review history. Missing legacy history is unknown. All entries are advisory and require current Plytix validation; stale_source=false does not certify freshness. Use scope to prevent reusing unrelated meanings.',
     inputSchema: memoryGetInput.shape,
   }, async (args: z.infer<typeof memoryGetInput>) => ({ ...json(await dictionary.get(args)), resultMetadata: { source: 'local', freshness: 'cached' } }));
   registerTool(server, 'pricing_dictionary_update', {
@@ -51,7 +51,7 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     title: 'Review Pricing Rules', description: 'Read versioned confirmed/proposed calculation rules, conditions and restrictions with storage-scope metadata. Also read pricing_guidance_get for protected workflow instructions and exclusions.', inputSchema: {},
   }, async () => json(await pricing.rulesGet()));
   registerTool(server, 'pricing_rules_save', {
-    title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at an expected revision. Requires exact host approval and pricing_rules_save allowlist. Proposed rules never calculate updates; marking confirmed requires reviewing the complete rule. Does not change Plytix products.', inputSchema: rulesInput.shape,
+    title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at expected_revision with optional review sources/reason. New or changed reusable supplier-cost rules require full_item_cost using current catalog dimensions and explicit source price units; do not encode a previous stock length or area as a fixed multiplier. Arithmetic adjustments must declare pricing_adjustment and have reviewed evidence. Old unchanged rules/history remain readable. Requires exact host approval and write allowlist; proposed rules never execute. Does not change Plytix products.', inputSchema: rulesInput.shape,
   }, async (args: z.infer<typeof rulesInput>) => json(await pricing.rulesSave(args)));
   registerTool(server, 'pricing_plan', {
     title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule_ids or private one-run batch_rules to calculate differences against live numeric values, inheritance and restrictions. batch_rules do not save or activate shared rules and still require exact approval of final changes. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,

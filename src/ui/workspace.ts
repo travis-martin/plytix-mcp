@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 
-const app = new App({ name: 'Plytix Catalog Workspace', version: '0.13.1' });
+const app = new App({ name: 'Plytix Catalog Workspace', version: '0.14.0' });
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id).value.trim();
 const status = (message: string, error = false) => { el('status').textContent = message; el('status').className = error ? 'notice error' : ''; };
@@ -128,6 +128,7 @@ async function pricingDictionary() {
   });
   const target = clear('pricing-dictionary-results'); metadata(target, result.metadata);
   target.append(element('p', `Saved definitions · Revision ${result.data.revision}`));
+  if (result.data.record_provenance) details(target, 'Sources and review history', result.data.record_provenance);
   if (!result.data.entries?.length) notice(target, 'No saved price-list definitions match this scope.');
   else table(target, ['Term / kind', 'Meaning', 'Scope', 'Status / evidence'], result.data.entries.map((entry: any) => [
     `${entry.value.term} · ${entry.value.kind.replaceAll('_', ' ')}`,
@@ -150,6 +151,7 @@ async function loadGuidance() {
   workflowGuidance = data;
   const target = clear('guidance-results'); clear('guidance-request-status'); metadata(target, result.metadata);
   target.append(element('p', `Workflow guidance · Revision ${data.revision}`));
+  if (data.record_provenance) details(target, 'Sources and review history', data.record_provenance);
   if (data.storage_scope || data.storage_backend) details(target, 'Storage and sharing', { scope: data.storage_scope, backend: data.storage_backend });
   if (!data.instructions.length && !data.exclusions.length) notice(target, 'No protected workflow instructions or exclusions are saved in this scope yet.');
   else {
@@ -173,7 +175,10 @@ bindForm('guidance-edit-form', async () => {
   }
   const current = (await call('pricing_guidance_get', { include_retired: true })).data;
   if (!current.complete_for_save || current.revision !== workflowGuidance.revision || current.digest !== workflowGuidance.digest) throw new Error('Saved guidance changed while you were editing. Copy your draft and reload the latest guidance before requesting a save.');
-  const args = { expected_revision: workflowGuidance.revision, instructions: draft.instructions, exclusions: draft.exclusions };
+  const source = input('guidance-review-source'), reason = input('guidance-review-reason'), reviewer = input('guidance-reviewer');
+  if (!source || !reason) throw new Error('Add the source of this instruction and the reason for the change before requesting review.');
+  const args = { expected_revision: workflowGuidance.revision, instructions: draft.instructions, exclusions: draft.exclusions,
+    review: { sources: [{ kind: input('guidance-review-source-kind'), reference: source }], reason, ...(reviewer ? { reviewer } : {}) } };
   if (JSON.stringify(args).length > 64000) throw new Error('This guidance draft is too large for one exact approval request. Keep the complete guidance concise before saving.');
   const capabilities = app.getHostCapabilities();
   if (!capabilities?.message?.text && !capabilities?.updateModelContext) throw new Error('This host cannot attach a guidance-save request. Copy the draft into the conversation.');
