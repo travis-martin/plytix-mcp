@@ -42,6 +42,7 @@
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/http-main.ts",
     "build": "tsc && node scripts/build-ui.mjs",
+    "auth-helper:build": "node scripts/build-auth-helper.mjs",
     "plugin:build": "node scripts/plugin-build.mjs",
     "plugin:check": "node scripts/plugin-check.mjs",
     "plugin:test": "node scripts/plugin-test.mjs",

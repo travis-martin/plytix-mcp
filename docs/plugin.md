@@ -113,6 +113,12 @@ or arbitrary helper commands in this metadata. The script rejects those fields
 and unsafe command characters. It checks file existence without reading the
 credential file and reconstructs the repository's existing header helper command.
 
+Machine mode also accepts `helper_path`, the absolute path to a verified standalone
+helper artifact. Use the content-addressed build described in
+[machine authentication](machine-authentication.md) for production so Git branch
+changes cannot replace the active helper. This field is rejected in developer mode
+and accepts a file path, never an arbitrary command.
+
 The result is a versioned source under
 `.local/plugin-marketplace/profiles/remote/`, retaining the plugin identity,
 presentation assets, and four skills. It uses Codex's native

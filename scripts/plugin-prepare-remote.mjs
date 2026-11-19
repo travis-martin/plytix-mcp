@@ -8,7 +8,7 @@ import { helperArgs, parseHelperArgs } from './cloud-run-headers.mjs';
 import { validatePlugin } from './plugin-check.mjs';
 
 const SAFE_ERROR = 'Remote plugin preparation failed; inspect the private connection metadata. No credentials or raw configuration were logged.';
-const fields = new Set(['url', 'env_file', 'account', 'gcloud', 'machine_config', 'startup_timeout_sec', 'tool_timeout_sec']);
+const fields = new Set(['url', 'env_file', 'account', 'gcloud', 'machine_config', 'helper_path', 'startup_timeout_sec', 'tool_timeout_sec']);
 const safePath = value => typeof value === 'string' && isAbsolute(value) && !/["&|<>^%!$`\r\n\0]/.test(value);
 
 export function remoteConnection(input, repo) {
@@ -17,9 +17,11 @@ export function remoteConnection(input, repo) {
   const url = new URL(input.url);
   assert(url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash, 'Use the verified private HTTPS endpoint without credentials');
   assert(safePath(input.env_file), 'Use private absolute configuration paths');
-  const helper = join(repo, 'scripts/cloud-run-headers.mjs').replaceAll('\\', '/');
-  assert(safePath(helper));
   const machine = Object.hasOwn(input, 'machine_config');
+  const pinnedHelper = Object.hasOwn(input, 'helper_path');
+  assert(!pinnedHelper || machine, 'A pinned helper requires machine authentication');
+  const helper = pinnedHelper ? input.helper_path : join(repo, 'scripts/cloud-run-headers.mjs').replaceAll('\\', '/');
+  assert(safePath(helper), 'Use a safe absolute helper file path');
   if (machine) {
     assert(!Object.hasOwn(input, 'account') && !Object.hasOwn(input, 'gcloud'), 'Choose one authentication mode');
     assert(safePath(input.machine_config), 'Use private absolute configuration paths');
@@ -51,6 +53,7 @@ export async function prepareRemoteProfile(repo, connectionFile) {
   const server = remoteConnection(input, repo);
   // Existence only: never read or copy the private credential file.
   await access(input.env_file); await access(input.machine_config ?? input.gcloud);
+  if (Object.hasOwn(input, 'helper_path')) assert((await lstat(input.helper_path)).isFile(), 'Pinned helper must be a regular file');
   const portable = JSON.parse(await readFile(join(source, 'plugin.json'), 'utf8'));
   const presentation = structuredClone(portable.extensions['com.openai'].interface);
   presentation.shortDescription = 'Remote catalog and pricing';

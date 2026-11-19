@@ -21,6 +21,7 @@ $journal = $null
 $certificate = $null
 $privateRsa = $null
 $publicRsa = $null
+$stage = 'validate-options'
 
 function Assert-LocalDirectoryPath([string]$Value) {
     if ([string]::IsNullOrWhiteSpace($Value) -or $Value -notmatch '^[A-Za-z]:[\\/]' -or $Value -match '[\r\n\0]') { throw 'Invalid output path' }
@@ -65,8 +66,14 @@ function Assert-TpmCertificate($Cert, $Rsa) {
 
 try {
     if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) { throw 'Windows is required' }
+    # A clean Windows PowerShell process does not necessarily have Cert: yet.
+    # Import the provider explicitly instead of depending on an operator profile.
+    # Select this process's built-in module; a Node parent can inherit a module
+    # search path containing incompatible PowerShell 7 versions of it.
+    Import-Module (Join-Path $PSHOME 'Modules\Microsoft.PowerShell.Security\Microsoft.PowerShell.Security.psd1') -ErrorAction Stop
     if ($InspectOnly) {
         if ($CertificateThumbprint -cnotmatch '^[A-Fa-f0-9]{40}$') { throw 'Invalid thumbprint' }
+        $stage = 'inspect-certificate'
         $certificate = Get-Item -LiteralPath ('Cert:\CurrentUser\My\' + $CertificateThumbprint.ToUpperInvariant())
         $privateRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
         Assert-TpmCertificate $certificate $privateRsa
@@ -89,6 +96,7 @@ try {
     $notAfter = $createdAt.AddYears($ValidityYears)
     # New-Item without Force reserves the destination and fails if it already
     # exists. Any interrupted attempt keeps this directory to prevent retries.
+    $stage = 'reserve-output'
     $null = New-Item -ItemType Directory -Path $destination -ErrorAction Stop
     $journalPath = [System.IO.Path]::Combine($destination, 'provisioning-state.jsonl')
     $journal = [System.IO.File]::Open($journalPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::Read)
@@ -101,8 +109,11 @@ try {
         Provider = $expectedProvider; Container = $container; KeyAlgorithm = 'RSA'; KeyLength = 2048
         KeyExportPolicy = 'NonExportable'; KeyUsage = 'DigitalSignature'; KeyUsageProperty = 'Sign'
         KeyProtection = 'None'; HashAlgorithm = 'SHA256'; CertStoreLocation = 'Cert:\CurrentUser\My'
-        NotBefore = $createdAt.AddMinutes(-5); NotAfter = $notAfter
+        # CertEnroll treats these cmdlet values as local wall-clock times even
+        # when DateTime.Kind is Utc; convert explicitly before passing them.
+        NotBefore = $createdAt.AddMinutes(-5).ToLocalTime(); NotAfter = $notAfter.ToLocalTime()
     }
+    $stage = 'create-certificate'
     $certificate = New-SelfSignedCertificate @parameters
     # Retain the returned thumbprint before validation/export can fail. If the
     # provider fails before returning, the reserved container still identifies
@@ -111,17 +122,20 @@ try {
         version = 1; phase = 'certificate-created'; certificateThumbprint = $certificate.Thumbprint
         keyContainer = $container; certificateStore = 'CurrentUser/My'
     })
+    $stage = 'verify-tpm-certificate'
     $privateRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($certificate)
     Assert-TpmCertificate $certificate $privateRsa
     $publicRsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPublicKey($certificate)
     $challenge = [System.Text.Encoding]::UTF8.GetBytes('Plytix MCP local TPM provisioning verification: ' + $container)
     $signature = $privateRsa.SignData($challenge, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)
     if (-not $publicRsa.VerifyData($challenge, $signature, [System.Security.Cryptography.HashAlgorithmName]::SHA256, [System.Security.Cryptography.RSASignaturePadding]::Pkcs1)) { throw 'Signature verification failed' }
+    $stage = 'write-public-certificate'
     $certificatePath = [System.IO.Path]::Combine($destination, 'certificate.pem')
     # RawData contains only the public X.509 certificate. No private-key export
     # API is used, and the provider policy independently prohibits export.
     $base64 = [Convert]::ToBase64String($certificate.RawData, [Base64FormattingOptions]::InsertLineBreaks)
     Write-NewPublicFile $certificatePath ("-----BEGIN CERTIFICATE-----`r`n" + $base64 + "`r`n-----END CERTIFICATE-----`r`n")
+    $stage = 'write-public-metadata'
     $metadata = [ordered]@{
         version = 1; certificateThumbprint = $certificate.Thumbprint; provider = $expectedProvider
         keySize = $privateRsa.KeySize; exportable = $false; certificateStore = 'CurrentUser/My'
@@ -133,7 +147,18 @@ try {
     Write-ProvisioningEvent $journal ([ordered]@{ version = 1; phase = 'complete'; certificateThumbprint = $certificate.Thumbprint; signVerifyPassed = $true })
     [Console]::Out.WriteLine(($metadata | ConvertTo-Json -Compress))
 } catch {
+    $codes = @()
+    for ($exception = $_.Exception; $null -ne $exception -and $codes.Count -lt 4; $exception = $exception.InnerException) {
+        $codes += ('0x{0:X8}' -f ($exception.HResult -band 0xFFFFFFFFL))
+    }
+    # Error messages, command text, paths and provider output can contain private
+    # input. Only fixed stage names, enum categories and numeric codes are kept.
+    $diagnostic = [ordered]@{ stage = $stage; category = [string]$_.CategoryInfo.Category; hresults = $codes }
+    if ($null -ne $journal) {
+        try { Write-ProvisioningEvent $journal ([ordered]@{ version = 1; phase = 'failed'; diagnostic = $diagnostic }) } catch { }
+    }
     [Console]::Error.WriteLine($safeFailure)
+    [Console]::Error.WriteLine(($diagnostic | ConvertTo-Json -Compress))
     exit 1
 } finally {
     if ($null -ne $publicRsa) { $publicRsa.Dispose() }

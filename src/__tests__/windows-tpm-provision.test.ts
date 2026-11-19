@@ -19,7 +19,9 @@ function rejectedInvocation(parameters: Record<string, unknown>, mockedCreationA
   // must never create an actual credential in the Windows certificate store.
   const code = `
     function global:New-SelfSignedCertificate {
-      [System.IO.File]::WriteAllText($env:PLYTIX_CREATION_FLAG, 'unexpected')
+      param([DateTime]$NotBefore, [DateTime]$NotAfter)
+      $captured = @{ notBeforeKind = [string]$NotBefore.Kind; notAfterKind = [string]$NotAfter.Kind; notBeforeUtc = $NotBefore.ToUniversalTime().ToString('o'); notAfterUtc = $NotAfter.ToUniversalTime().ToString('o') }
+      [System.IO.File]::WriteAllText($env:PLYTIX_CREATION_FLAG, ($captured | ConvertTo-Json -Compress))
       throw 'Fixture refuses real credential creation'
     }
     $parameters = @{}
@@ -33,8 +35,18 @@ function rejectedInvocation(parameters: Record<string, unknown>, mockedCreationA
   expect(result.error).toBeUndefined();
   expect(result.status).toBe(1);
   expect(result.stdout).toBe('');
-  expect(result.stderr.trim()).toBe('TPM provisioning failed. No private key was exported. Preserve any output directory and inspect provisioning-state.jsonl and the CurrentUser certificate store before retrying; partial state may exist.');
-  expect(existsSync(flag)).toBe(mockedCreationAttempt);
+  const lines = result.stderr.trim().split(/\r?\n/);
+  expect(lines, result.stderr).toHaveLength(2);
+  expect(lines[0]).toBe('TPM provisioning failed. No private key was exported. Preserve any output directory and inspect provisioning-state.jsonl and the CurrentUser certificate store before retrying; partial state may exist.');
+  const diagnostic = JSON.parse(lines[1]);
+  expect(Object.keys(diagnostic).sort()).toEqual(['category', 'hresults', 'stage']);
+  expect(diagnostic.stage).toMatch(/^(validate-options|reserve-output|create-certificate|inspect-certificate)$/);
+  expect(diagnostic.category).toMatch(/^[A-Za-z]+$/);
+  expect(diagnostic.hresults.length).toBeGreaterThan(0);
+  for (const code of diagnostic.hresults) expect(code).toMatch(/^0x[0-9A-F]{8}$/);
+  expect(result.stderr).not.toContain('secret-fixture-invalid');
+  expect(result.stderr).not.toContain('Fixture refuses real credential creation');
+  expect(existsSync(flag), result.stderr).toBe(mockedCreationAttempt);
   return result;
 }
 
@@ -76,9 +88,14 @@ it.runIf(windows)('preserves a reserved recovery record and rejects a retry afte
   rejectedInvocation({ OutputDirectory: output }, true);
   const journalPath = join(output, 'provisioning-state.jsonl');
   const initial = await readFile(journalPath, 'utf8');
-  const record = JSON.parse(initial);
+  const [record, failure] = initial.trim().split(/\r?\n/).map(line => JSON.parse(line));
   expect(record).toMatchObject({ version: 1, phase: 'reserved', certificateStore: 'CurrentUser/My' });
   expect(record.keyContainer).toMatch(/^plytix-mcp-[a-f0-9]{32}$/);
+  expect(failure).toMatchObject({ version: 1, phase: 'failed', diagnostic: { stage: 'create-certificate' } });
+  const captured = JSON.parse(await readFile(join(directory, 'unexpected-credential-creation.txt'), 'utf8'));
+  expect(captured).toMatchObject({ notBeforeKind: 'Local', notAfterKind: 'Local' });
+  expect(Date.parse(captured.notAfterUtc)).toBe(Date.parse(record.requestedNotAfter));
+  expect(Math.abs(Date.parse(captured.notBeforeUtc) - (Date.parse(record.createdAt) - 300000))).toBeLessThan(1000);
   expect(existsSync(join(output, 'certificate.pem'))).toBe(false);
   expect(existsSync(join(output, 'identity-public.json'))).toBe(false);
   await rm(join(directory, 'unexpected-credential-creation.txt'));

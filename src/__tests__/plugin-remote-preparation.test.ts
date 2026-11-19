@@ -28,6 +28,29 @@ it('builds machine authentication without depending on an account or gcloud', ()
   expect(server.url).toBe(connection.url);
 });
 
+it('pins machine authentication to an explicit helper file instead of the mutable checkout', () => {
+  const input = { url: connection.url, env_file: connection.env_file, machine_config: join(repo, 'machine-auth.json'),
+    helper_path: join(repo, 'immutable-runtime', 'auth-helper.mjs') };
+  const server = remoteConnection(input, repo);
+  expect(server.http_headers_helper).toBe(`node "${input.helper_path}" --env-file "${input.env_file}" --machine-config "${input.machine_config}"`);
+  expect(server.http_headers_helper).not.toContain('scripts/cloud-run-headers.mjs');
+  expect(server.http_headers_helper).not.toMatch(/--account|--gcloud/);
+});
+
+it('rejects pinned helpers for developer authentication and command-shaped helper paths', () => {
+  const helper_path = join(repo, 'immutable-runtime', 'auth-helper.mjs');
+  expect(() => remoteConnection({ ...connection, helper_path }, repo)).toThrow('A pinned helper requires machine authentication');
+  const machine = { url: connection.url, env_file: connection.env_file, machine_config: join(repo, 'machine-auth.json') };
+  for (const unsafe of ['relative.mjs', 'node helper.mjs', '', null, undefined]) {
+    expect(() => remoteConnection({ ...machine, helper_path: unsafe }, repo)).toThrow();
+  }
+  for (const fragment of ['"', '$(', '`', '&', '|', '>', '<', '%', '!', '^', '\n']) {
+    expect(() => remoteConnection({ ...machine, helper_path: helper_path + fragment }, repo)).toThrow();
+  }
+  expect(() => remoteConnection({ ...machine, helper_path, account: connection.account }, repo)).toThrow('Choose one authentication mode');
+  expect(() => remoteConnection({ ...machine, helper_path, gcloud: connection.gcloud }, repo)).toThrow('Choose one authentication mode');
+});
+
 it('rejects mixed authentication modes and unsafe machine configuration paths', () => {
   const machine_config = join(repo, 'machine-auth.json');
   expect(() => remoteConnection({ ...connection, machine_config }, repo)).toThrow('Choose one authentication mode');
@@ -57,7 +80,7 @@ it('rejects shell expansions and operators in every interpolated path or account
   }
 });
 
-it.each(['legacy', 'machine'])('prepares a native remote %s profile without replacing local history, secrets or the portable artifact', async mode => {
+it.each(['legacy', 'machine', 'machine-pinned'])('prepares a native remote %s profile without replacing local history, secrets or the portable artifact', async mode => {
   const source = join(repo, 'build/plugin-artifacts/plytix-catalog');
   await cp(resolve('plugin/plytix-catalog'), source, { recursive: true });
   for (const directory of ['server', 'ui']) await mkdir(join(source, directory));
@@ -69,8 +92,11 @@ it.each(['legacy', 'machine'])('prepares a native remote %s profile without repl
   await mkdir(local, { recursive: true });
   await writeFile(join(local, 'keep.txt'), 'local history');
   const machine_config = join(repo, 'machine-auth.json');
-  const input = mode === 'machine' ? { url: connection.url, env_file: connection.env_file, machine_config } : connection;
-  if (mode === 'machine') await writeFile(machine_config, JSON.stringify({ public_metadata_only: 'CONFIG_FIXTURE_MUST_NOT_BE_COPIED' }));
+  const helper_path = join(repo, 'pinned-auth-helper.mjs');
+  const input = mode !== 'legacy' ? { url: connection.url, env_file: connection.env_file, machine_config,
+    ...(mode === 'machine-pinned' ? { helper_path } : {}) } : connection;
+  if (mode !== 'legacy') await writeFile(machine_config, JSON.stringify({ public_metadata_only: 'CONFIG_FIXTURE_MUST_NOT_BE_COPIED' }));
+  if (mode === 'machine-pinned') await writeFile(helper_path, '// PINNED_HELPER_FIXTURE_MUST_NOT_BE_COPIED');
   const metadata = join(repo, 'connection.json');
   await writeFile(metadata, JSON.stringify(input));
   const result = await prepareRemoteProfile(repo, metadata);
@@ -84,14 +110,23 @@ it.each(['legacy', 'machine'])('prepares a native remote %s profile without repl
   expect(await readdir(result.plugin)).not.toContain('plugin.json');
   expect(await readdir(result.plugin)).not.toContain('.env');
   expect(await readdir(result.plugin)).not.toContain('machine-auth.json');
-  expect(JSON.stringify(config)).not.toMatch(/SECRET_FIXTURE|CONFIG_FIXTURE/);
+  expect(await readdir(result.plugin)).not.toContain('pinned-auth-helper.mjs');
+  expect(JSON.stringify(config)).not.toMatch(/SECRET_FIXTURE|CONFIG_FIXTURE|PINNED_HELPER_FIXTURE/);
   expect(await readFile(join(local, 'keep.txt'), 'utf8')).toBe('local history');
   expect(JSON.parse(await readFile(join(source, 'mcp.json'), 'utf8')).mcpServers['plytix-catalog'].type).toBe('stdio');
   expect(await prepareRemoteProfile(repo, metadata)).toEqual(result);
-  if (mode === 'machine') {
+  if (mode !== 'legacy') {
     await rm(machine_config);
     await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow();
     await writeFile(machine_config, JSON.stringify({ public_metadata_only: 'CONFIG_FIXTURE_MUST_NOT_BE_COPIED' }));
+  }
+  if (mode === 'machine-pinned') {
+    await rm(helper_path);
+    await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow();
+    await mkdir(helper_path);
+    await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow('Pinned helper must be a regular file');
+    await rm(helper_path, { recursive: true });
+    await writeFile(helper_path, '// PINNED_HELPER_FIXTURE_MUST_NOT_BE_COPIED');
   }
   await writeFile(join(result.plugin, '.mcp.json'), '{}');
   await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow('Existing connection differs');

@@ -78,7 +78,15 @@ read succeeds.
    This emits booleans only. It does not establish certificate availability, IAM
    access or a working token exchange. The normal helper emits credentials to a
    private host pipe; never run it directly into a terminal or captured tool output.
-6. Prepare a new native remote plugin profile with `machine_config` instead of
+6. Run `npm run auth-helper:build` to build a standalone, content-addressed helper
+   with its signer and license. Copy the complete immutable artifact directory to
+   a private runtime location outside the working checkout and verify its manifest
+   checksums. Set `helper_path` in connection metadata to the copied
+   `cloud-run-headers.mjs`. This prevents Git branch changes or missing checkout
+   dependencies from breaking the production connector. The artifact contains no
+   machine metadata or credentials; Node and the existing credential file remain
+   external dependencies.
+7. Prepare a new native remote plugin profile with `machine_config` instead of
    `account` and `gcloud` in its private connection metadata. Preserve the endpoint,
    environment path and timeouts. Use the supported Codex installer to activate it,
    then verify fresh machine-authenticated MCP initialization and a bounded read.

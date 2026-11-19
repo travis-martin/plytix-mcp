@@ -12,11 +12,19 @@ knowledge has its own committed revision archive and private export lineage.
   connectors and the local review panel, independent of personal Google sessions.
 - Bounded automatic Google ID-token exchange, hardware-key validation and a public
   certificate provisioner with partial-progress records and no private-key export.
+- A standalone, content-addressed authentication helper that can be pinned outside
+  the working checkout and selected with machine-only `helper_path` metadata.
+
+### Fixed
+
+- Clean Windows PowerShell provisioning loads its own certificate provider and
+  passes local-time certificate dates to CertEnroll while retaining UTC records.
+- Provisioning failures retain sanitized stage/category/HRESULT diagnostics.
 
 Change-Id: change-20261118-connector-machine-auth
 Reason: Remove recurring human Google reauthentication from unattended connector access.
 Sources: approved production authentication request; docs/machine-authentication.md
-Validation: Typecheck/build, all 643 fixtures with one worker, 3 change-record tests and plugin validation/isolated startup passed; live provisioning remains pending exact approval.
+Validation: Typecheck/build, all 647 fixtures with one worker, 3 change-record tests and plugin validation/isolated startup passed. Approved TPM identity, pinned connector and rejected-token renewal were verified live without personal Google credentials or product writes.
 Rollback: Forward-revert code/docs and restore the previous native profile; review credential revocation separately.
 
 ## 0.16.0 — 2026-11-18
