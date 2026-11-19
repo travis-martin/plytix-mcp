@@ -4,11 +4,11 @@ import { access, cp, lstat, mkdir, readFile, readdir, writeFile } from 'node:fs/
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
-import { parseHelperArgs } from './cloud-run-headers.mjs';
+import { helperArgs, parseHelperArgs } from './cloud-run-headers.mjs';
 import { validatePlugin } from './plugin-check.mjs';
 
 const SAFE_ERROR = 'Remote plugin preparation failed; inspect the private connection metadata. No credentials or raw configuration were logged.';
-const fields = new Set(['url', 'env_file', 'account', 'gcloud', 'startup_timeout_sec', 'tool_timeout_sec']);
+const fields = new Set(['url', 'env_file', 'account', 'gcloud', 'machine_config', 'startup_timeout_sec', 'tool_timeout_sec']);
 const safePath = value => typeof value === 'string' && isAbsolute(value) && !/["&|<>^%!$`\r\n\0]/.test(value);
 
 export function remoteConnection(input, repo) {
@@ -16,16 +16,24 @@ export function remoteConnection(input, repo) {
   assert(Object.keys(input).every(key => fields.has(key)), 'Unsupported connection field');
   const url = new URL(input.url);
   assert(url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash, 'Use the verified private HTTPS endpoint without credentials');
-  assert(safePath(input.env_file) && safePath(input.gcloud), 'Use private absolute configuration paths');
+  assert(safePath(input.env_file), 'Use private absolute configuration paths');
   const helper = join(repo, 'scripts/cloud-run-headers.mjs').replaceAll('\\', '/');
   assert(safePath(helper));
-  const parsed = parseHelperArgs(['--env-file', input.env_file, '--account', input.account, '--gcloud', input.gcloud]);
+  const machine = Object.hasOwn(input, 'machine_config');
+  if (machine) {
+    assert(!Object.hasOwn(input, 'account') && !Object.hasOwn(input, 'gcloud'), 'Choose one authentication mode');
+    assert(safePath(input.machine_config), 'Use private absolute configuration paths');
+  } else assert(safePath(input.gcloud), 'Use private absolute configuration paths');
+  const parsed = parseHelperArgs(['--env-file', input.env_file, ...(machine
+    ? ['--machine-config', input.machine_config]
+    : ['--account', input.account, '--gcloud', input.gcloud])]);
+  const commandArgs = helperArgs(parsed).map(argument => argument.startsWith('--') ? argument : `"${argument}"`).join(' ');
   const startup = input.startup_timeout_sec ?? 30, tool = input.tool_timeout_sec ?? 120;
   assert(Number.isFinite(startup) && startup > 0 && startup <= 300);
   assert(Number.isFinite(tool) && tool > 0 && tool <= 600);
   return {
     type: 'streamable-http', url: url.href,
-    http_headers_helper: `node "${helper}" --env-file "${parsed.envFile}" --account "${parsed.account}" --gcloud "${parsed.gcloud}"`,
+    http_headers_helper: `node "${helper}" ${commandArgs}`,
     startup_timeout_sec: startup, tool_timeout_sec: tool,
   };
 }
@@ -42,7 +50,7 @@ export async function prepareRemoteProfile(repo, connectionFile) {
   const input = JSON.parse(await readFile(connectionFile, 'utf8'));
   const server = remoteConnection(input, repo);
   // Existence only: never read or copy the private credential file.
-  await access(input.env_file); await access(input.gcloud);
+  await access(input.env_file); await access(input.machine_config ?? input.gcloud);
   const portable = JSON.parse(await readFile(join(source, 'plugin.json'), 'utf8'));
   const presentation = structuredClone(portable.extensions['com.openai'].interface);
   presentation.shortDescription = 'Remote catalog and pricing';

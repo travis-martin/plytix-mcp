@@ -20,6 +20,28 @@ it('builds a remote connection that references the existing helper and credentia
   expect(server.http_headers_helper).not.toContain('SECRET_FIXTURE');
 });
 
+it('builds machine authentication without depending on an account or gcloud', () => {
+  const input = { url: connection.url, env_file: connection.env_file, machine_config: join(repo, 'machine-auth.json') };
+  const server = remoteConnection(input, repo);
+  expect(server.http_headers_helper).toContain('--machine-config "' + input.machine_config + '"');
+  expect(server.http_headers_helper).not.toMatch(/--account|--gcloud|SECRET_FIXTURE/);
+  expect(server.url).toBe(connection.url);
+});
+
+it('rejects mixed authentication modes and unsafe machine configuration paths', () => {
+  const machine_config = join(repo, 'machine-auth.json');
+  expect(() => remoteConnection({ ...connection, machine_config }, repo)).toThrow('Choose one authentication mode');
+  for (const extra of [{ account: connection.account }, { gcloud: connection.gcloud }, { account: undefined }, { gcloud: undefined }]) {
+    expect(() => remoteConnection({ url: connection.url, env_file: connection.env_file, machine_config, ...extra }, repo)).toThrow('Choose one authentication mode');
+  }
+  for (const fragment of ['"', '$(', '`', '&', '|', '>', '<', '%', '!', '^', '\n']) {
+    expect(() => remoteConnection({ url: connection.url, env_file: connection.env_file, machine_config: machine_config + fragment }, repo)).toThrow();
+  }
+  for (const unsafe of ['relative.json', '', null]) {
+    expect(() => remoteConnection({ url: connection.url, env_file: connection.env_file, machine_config: unsafe }, repo)).toThrow();
+  }
+});
+
 it('rejects raw headers, arbitrary helpers and embedded URL credentials', () => {
   for (const bad of [{ headers: { Authorization: 'secret' } }, { http_headers_helper: 'whoami' }, { url: 'https://user:secret@example.test/mcp' }, { url: 'https://example.test/mcp?token=secret' }, { url: 'http://example.test/mcp' }]) {
     expect(() => remoteConnection({ ...connection, ...bad }, repo)).toThrow();
@@ -35,7 +57,7 @@ it('rejects shell expansions and operators in every interpolated path or account
   }
 });
 
-it('prepares a native remote profile without replacing local history, secrets or the portable artifact', async () => {
+it.each(['legacy', 'machine'])('prepares a native remote %s profile without replacing local history, secrets or the portable artifact', async mode => {
   const source = join(repo, 'build/plugin-artifacts/plytix-catalog');
   await cp(resolve('plugin/plytix-catalog'), source, { recursive: true });
   for (const directory of ['server', 'ui']) await mkdir(join(source, directory));
@@ -46,22 +68,31 @@ it('prepares a native remote profile without replacing local history, secrets or
   const local = join(repo, '.local/plugin-marketplace/plugins/plytix-catalog');
   await mkdir(local, { recursive: true });
   await writeFile(join(local, 'keep.txt'), 'local history');
+  const machine_config = join(repo, 'machine-auth.json');
+  const input = mode === 'machine' ? { url: connection.url, env_file: connection.env_file, machine_config } : connection;
+  if (mode === 'machine') await writeFile(machine_config, JSON.stringify({ public_metadata_only: 'CONFIG_FIXTURE_MUST_NOT_BE_COPIED' }));
   const metadata = join(repo, 'connection.json');
-  await writeFile(metadata, JSON.stringify(connection));
+  await writeFile(metadata, JSON.stringify(input));
   const result = await prepareRemoteProfile(repo, metadata);
   const config = JSON.parse(await readFile(join(result.plugin, '.mcp.json'), 'utf8'));
   const manifest = JSON.parse(await readFile(join(result.plugin, '.codex-plugin/plugin.json'), 'utf8'));
-  expect(config.mcpServers['plytix-catalog']).toEqual(remoteConnection(connection, repo));
+  expect(config.mcpServers['plytix-catalog']).toEqual(remoteConnection(input, repo));
   expect(manifest.name).toBe('plytix-catalog');
   expect(manifest.interface.displayName).toBe('Plytix Studio');
   expect(manifest.mcpServers).toBe('./.mcp.json');
   expect((await readdir(join(result.plugin, 'skills'))).length).toBe(4);
   expect(await readdir(result.plugin)).not.toContain('plugin.json');
   expect(await readdir(result.plugin)).not.toContain('.env');
-  expect(JSON.stringify(config)).not.toContain('SECRET_FIXTURE');
+  expect(await readdir(result.plugin)).not.toContain('machine-auth.json');
+  expect(JSON.stringify(config)).not.toMatch(/SECRET_FIXTURE|CONFIG_FIXTURE/);
   expect(await readFile(join(local, 'keep.txt'), 'utf8')).toBe('local history');
   expect(JSON.parse(await readFile(join(source, 'mcp.json'), 'utf8')).mcpServers['plytix-catalog'].type).toBe('stdio');
   expect(await prepareRemoteProfile(repo, metadata)).toEqual(result);
+  if (mode === 'machine') {
+    await rm(machine_config);
+    await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow();
+    await writeFile(machine_config, JSON.stringify({ public_metadata_only: 'CONFIG_FIXTURE_MUST_NOT_BE_COPIED' }));
+  }
   await writeFile(join(result.plugin, '.mcp.json'), '{}');
   await expect(prepareRemoteProfile(repo, metadata)).rejects.toThrow('Existing connection differs');
   expect(await readFile(join(result.plugin, '.mcp.json'), 'utf8')).toBe('{}');

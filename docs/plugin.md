@@ -104,10 +104,11 @@ verified private Cloud Run connection:
 node scripts/plugin-prepare-remote.mjs --connection-file "C:/absolute/private/connection.json"
 ```
 
-The ignored input JSON contains only `url`, `env_file`, `account`, and `gcloud`,
-with optional `startup_timeout_sec` and `tool_timeout_sec`. Use the existing HTTPS
-MCP URL, absolute paths to the original credential file and gcloud launcher, and
-the already authorized Google account. Do not put tokens, headers, credentials,
+The ignored input JSON contains `url` and `env_file`, plus either `account` and
+`gcloud` for developer authentication or `machine_config` for an approved
+[Windows TPM identity](machine-authentication.md). The modes are mutually exclusive.
+Optional fields are `startup_timeout_sec` and `tool_timeout_sec`. Use the existing
+HTTPS MCP URL and absolute paths. Do not put tokens, headers, credentials,
 or arbitrary helper commands in this metadata. The script rejects those fields
 and unsafe command characters. It checks file existence without reading the
 credential file and reconstructs the repository's existing header helper command.
@@ -124,10 +125,11 @@ or pricing data.
 Select the returned `source_path` in the existing private marketplace and use the
 supported Codex install/refresh flow. Verify native discovery and a harmless
 remote call before disabling a duplicate standalone MCP entry; retain that entry
-and the prior local profile for rollback. A private remote desktop profile still
-depends on this PC's original credential file, Node, and gcloud sign-in. It is not
-a credential-free portable web/mobile connection. If Google requests
-reauthentication, refresh only the configured existing account with
+and the prior local profile for rollback. A private remote desktop profile depends
+on this PC's original credential file and Node. Machine mode also requires this
+Windows profile's TPM certificate; developer mode requires its gcloud sign-in.
+It is not a credential-free portable web/mobile connection. If Google requests
+reauthentication in developer mode, refresh only the configured existing account with
 `gcloud auth login <configured-account> --no-activate`, then reconnect.
 
 ## Pricing workflow

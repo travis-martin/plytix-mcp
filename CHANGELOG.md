@@ -4,6 +4,21 @@ Release entries follow [Change Record Standard v1](docs/change-history.md).
 The Git history remains authoritative for individual source changes. Organization
 knowledge has its own committed revision archive and private export lineage.
 
+## Unreleased
+
+### Added
+
+- Optional Windows TPM-backed service-account authentication for native remote
+  connectors and the local review panel, independent of personal Google sessions.
+- Bounded automatic Google ID-token exchange, hardware-key validation and a public
+  certificate provisioner with partial-progress records and no private-key export.
+
+Change-Id: change-20261118-connector-machine-auth
+Reason: Remove recurring human Google reauthentication from unattended connector access.
+Sources: approved production authentication request; docs/machine-authentication.md
+Validation: Typecheck/build, all 643 fixtures with one worker, 3 change-record tests and plugin validation/isolated startup passed; live provisioning remains pending exact approval.
+Rollback: Forward-revert code/docs and restore the previous native profile; review credential revocation separately.
+
 ## 0.16.0 — 2026-11-18
 
 ### Added

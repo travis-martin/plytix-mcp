@@ -140,6 +140,11 @@ can be used during a private initial revision before the external hostname is kn
 
 ## Clients
 
+Windows desktop clients can use a dedicated service account with a non-exportable
+TPM key, following [machine authentication](machine-authentication.md). This changes
+the caller identity and requires reviewed credential/IAM setup, without redeploying
+the service or changing its runtime identity.
+
 Local stdio is the first supported route. For a private Cloud Run service,
 `gcloud run services proxy SERVICE --project PROJECT --region REGION` can provide
 a loopback endpoint using existing approved caller access. The MCP client still

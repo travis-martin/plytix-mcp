@@ -3,7 +3,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { execFileSync } from 'node:child_process';
-import { parseHelperArgs, gcloudInvocation, produceHelperOutput, main } from '../../scripts/cloud-run-headers.mjs';
+import { parseHelperArgs, helperArgs, gcloudInvocation, produceHelperOutput, main } from '../../scripts/cloud-run-headers.mjs';
 
 let directory: string;
 let options: { envFile: string; account: string; gcloud: string; check: boolean };
@@ -72,7 +72,7 @@ it.each(['invalid-token', 'fixture.payload.signature\nSECRET', ''])('rejects inv
 
 it('sanitizes child process errors including captured credentials and command output', async () => {
   const execute = vi.fn().mockRejectedValue(Object.assign(new Error('fixture-password'), { stderr: 'fixture-token', stdout: 'private-output' }));
-  await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in\.$/);
+  await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and the selected authentication method\.$/);
 });
 
 it.each(['Reauthentication required.', 'Reauthentication is required.', 'reauth related error (invalid_rapt)'])('reports an actionable fixed reauthentication error without exposing subprocess details (%s)', async marker => {
@@ -93,7 +93,7 @@ it.each([
   { stderr: 'Reauthentication disabled by configuration', killed: false },
 ])('keeps other subprocess failures generic instead of guessing a reauthentication cause (%j)', async details => {
   const execute = vi.fn().mockRejectedValue(Object.assign(new Error('private-error'), details));
-  await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in\.$/);
+  await expect(produceHelperOutput(options, execute)).rejects.toThrow(/^Cloud Run authentication helper failed; verify private configuration and the selected authentication method\.$/);
 });
 
 it('fails closed for unsafe/missing credentials without starting the subprocess', async () => {
@@ -107,9 +107,58 @@ it('prints only generic failure information and never throws raw config errors',
   const output = { write: vi.fn() }, errors = { write: vi.fn() };
   expect(await main(['--env-file', 'private-secret-input'], output, errors)).toBe(1);
   expect(output.write).not.toHaveBeenCalled();
-  expect(errors.write).toHaveBeenCalledWith('Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in.\n');
+  expect(errors.write).toHaveBeenCalledWith('Cloud Run authentication helper failed; verify private configuration and the selected authentication method.\n');
   errors.write.mockClear();
   expect(await main(['--check', '--env-file', 'private-secret-input'], output, errors)).toBe(1);
   expect(errors.write).not.toHaveBeenCalled();
   expect(output.write).toHaveBeenCalledWith('{"configuration_valid":false,"token_acquisition_attempted":false}\n');
+});
+
+it('serializes either complete authentication mode and rejects mixed modes', () => {
+  const parsed = parseHelperArgs(['--env-file', 'C:/private/headers.env', '--machine-config', 'C:/private/machine.json'], 'win32');
+  expect(parsed).toEqual({ envFile: 'C:/private/headers.env', machineConfig: 'C:/private/machine.json', check: false });
+  expect(helperArgs(parsed, 'win32')).toEqual(['--env-file', 'C:/private/headers.env', '--machine-config', 'C:/private/machine.json']);
+  expect(helperArgs(options)).toEqual(['--env-file', options.envFile, '--account', options.account, '--gcloud', options.gcloud]);
+  for (const extra of [['--account', 'fixture@example.test'], ['--gcloud', 'C:/gcloud.cmd'], ['--machine-config', 'C:/private/again.json']]) {
+    expect(() => parseHelperArgs([...helperArgs(parsed, 'win32'), ...extra], 'win32')).toThrow();
+  }
+  expect(() => helperArgs({ ...parsed, account: 'fixture@example.test' }, 'win32')).toThrow();
+  expect(() => parseHelperArgs(['--env-file', 'C:/private/headers.env', '--machine-config', 'relative.json'], 'win32')).toThrow();
+});
+
+it.runIf(process.platform === 'win32')('uses the TPM token path without invoking gcloud and keeps check mode offline', async () => {
+  const machineConfig = join(directory, 'machine.json');
+  const now = 1800000000;
+  const metadata = { version: 1, type: 'windows-tpm', serviceAccount: 'fixture@fixture-project.iam.gserviceaccount.com',
+    keyId: 'a'.repeat(40), certificateThumbprint: 'B'.repeat(40), audience: 'https://fixture-service.run.app' };
+  await writeFile(machineConfig, JSON.stringify(metadata));
+  const machineOptions = { envFile: options.envFile, machineConfig, check: false };
+  const encode = (value: unknown) => Buffer.from(JSON.stringify(value)).toString('base64url');
+  const signature = Buffer.alloc(256, 1).toString('base64url');
+  const token = `${encode({ alg: 'RS256', typ: 'JWT', kid: 'fixture' })}.${encode({ iss: 'https://accounts.google.com', aud: metadata.audience,
+    sub: '123456789', email: metadata.serviceAccount, iat: now, exp: now + 3600 })}.${signature}`;
+  const execute = vi.fn();
+  const assertion = `${encode({ alg: 'RS256', typ: 'JWT', kid: metadata.keyId })}.${encode({ iss: metadata.serviceAccount,
+    aud: 'https://oauth2.googleapis.com/token', target_audience: metadata.audience, iat: now, exp: now + 300 })}.${signature}`;
+  const signAssertion = vi.fn().mockResolvedValue(assertion);
+  const fetch = vi.fn().mockResolvedValue(new Response(JSON.stringify({ id_token: token }), { status: 200 }));
+  const dependencies = { signAssertion, fetch, now: () => now * 1000 };
+  expect(await produceHelperOutput({ ...machineOptions, check: true }, execute, dependencies)).toEqual({ configuration_valid: true, token_acquisition_attempted: false });
+  expect(signAssertion).not.toHaveBeenCalled();
+  expect(fetch).not.toHaveBeenCalled();
+  expect((await produceHelperOutput(machineOptions, execute, dependencies)).Authorization).toBe(`Bearer ${token}`);
+  expect(execute).not.toHaveBeenCalled();
+  expect(signAssertion).toHaveBeenCalledTimes(1);
+});
+
+it.runIf(process.platform === 'win32')('machine failures cannot recommend personal login or leak protected output', async () => {
+  const machineConfig = join(directory, 'machine.json');
+  await writeFile(machineConfig, JSON.stringify({ version: 1, type: 'windows-tpm', serviceAccount: 'fixture@fixture-project.iam.gserviceaccount.com',
+    keyId: 'a'.repeat(40), certificateThumbprint: 'B'.repeat(40), audience: 'https://fixture-service.run.app' }));
+  const output = { write: vi.fn() }, errors = { write: vi.fn() }, execute = vi.fn();
+  const signAssertion = vi.fn().mockRejectedValue(Object.assign(new Error('private-key-content'), { stderr: 'Reauthentication required. secret' }));
+  expect(await main(['--env-file', options.envFile, '--machine-config', machineConfig], output, errors, execute, { signAssertion })).toBe(1);
+  expect(errors.write).toHaveBeenCalledExactlyOnceWith('Cloud Run authentication helper failed; verify private configuration and the selected authentication method.\n');
+  expect(output.write).not.toHaveBeenCalled();
+  expect(execute).not.toHaveBeenCalled();
 });

@@ -7,9 +7,10 @@ import { parseArgs } from 'node:util';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parse } from 'dotenv';
+import { readMachineConfiguration, getMachineIdentityToken } from './windows-tpm-identity.mjs';
 
 const executeFile = promisify(execFile);
-const SAFE_FAILURE = 'Cloud Run authentication helper failed; verify private configuration and existing gcloud sign-in.';
+const SAFE_FAILURE = 'Cloud Run authentication helper failed; verify private configuration and the selected authentication method.';
 const REAUTH_FAILURE = 'Google Cloud requires reauthentication. Privately run gcloud auth login <configured-account> --no-activate, then reconnect Plytix.';
 const ACCOUNT = /^[a-zA-Z0-9][a-zA-Z0-9._+-]{0,127}@[a-zA-Z0-9][a-zA-Z0-9.-]{0,190}$/;
 const FIELDS = ['MCP_AUTH_TOKEN', 'PLYTIX_API_KEY', 'PLYTIX_API_PASSWORD'];
@@ -29,19 +30,36 @@ export function parseHelperArgs(args, platform = process.platform) {
   try {
     const { values, tokens } = parseArgs({ args, allowPositionals: false, strict: true, tokens: true, options: {
       'env-file': { type: 'string' }, account: { type: 'string' },
-      gcloud: { type: 'string' }, check: { type: 'boolean', default: false },
+      gcloud: { type: 'string' }, 'machine-config': { type: 'string' }, check: { type: 'boolean', default: false },
     } });
     const names = tokens.filter(token => token.kind === 'option').map(token => token.name);
     if (new Set(names).size !== names.length) throw new Error();
     const paths = platform === 'win32' ? path.win32 : path.posix;
-    if (!values['env-file'] || !paths.isAbsolute(values['env-file']) ||
-        !values.gcloud || !paths.isAbsolute(values.gcloud) ||
+    if (!values['env-file'] || !paths.isAbsolute(values['env-file']) || /[\r\n\0]/.test(values['env-file'])) throw new Error();
+    if (values['machine-config'] !== undefined) {
+      if (values.account !== undefined || values.gcloud !== undefined ||
+          !paths.isAbsolute(values['machine-config']) || /[\r\n\0]/.test(values['machine-config'])) throw new Error();
+      return { envFile: values['env-file'], machineConfig: values['machine-config'], check: values.check };
+    }
+    if (!values.gcloud || !paths.isAbsolute(values.gcloud) ||
         !values.account || !ACCOUNT.test(values.account)) throw new Error();
     // Windows .cmd execution requires a command string; keep its only substituted
     // path/argument free of shell operators, expansions, quoting and newlines.
     if (/["&|<>^%!\r\n`]/.test(values.gcloud) || /[\r\n\0]/.test(values['env-file'])) throw new Error();
     return { envFile: values['env-file'], account: values.account, gcloud: values.gcloud, check: values.check };
   } catch { throw new Error(SAFE_FAILURE); }
+}
+
+// Shared by native plugin preparation and the local review panel. Parse again so
+// direct callers cannot accidentally serialize mixed or incomplete auth modes.
+export function helperArgs(options, platform = process.platform) {
+  const args = ['--env-file', options.envFile];
+  if (options.machineConfig !== undefined) args.push('--machine-config', options.machineConfig);
+  if (options.account !== undefined) args.push('--account', options.account);
+  if (options.gcloud !== undefined) args.push('--gcloud', options.gcloud);
+  if (options.check) args.push('--check');
+  parseHelperArgs(args, platform);
+  return args;
 }
 
 export async function readHeaderConfiguration(options) {
@@ -54,7 +72,7 @@ export async function readHeaderConfiguration(options) {
       if (typeof value !== 'string' || !value.length || value.length > 4096 || /[^\x20-\x7e]/.test(value)) throw new Error();
     }
     if (values.MCP_AUTH_TOKEN.length < 32) throw new Error();
-    if (!(await stat(options.gcloud)).isFile()) throw new Error();
+    if (!options.machineConfig && !(await stat(options.gcloud)).isFile()) throw new Error();
     return {
       'X-MCP-Token': values.MCP_AUTH_TOKEN,
       'X-Plytix-API-Key': values.PLYTIX_API_KEY,
@@ -81,10 +99,17 @@ export function gcloudInvocation(options, platform = process.platform, environme
   return { executable: options.gcloud, args, windowsVerbatimArguments: false };
 }
 
-export async function produceHelperOutput(options, execute = executeFile) {
+export async function produceHelperOutput(options, execute = executeFile, machineDependencies = {}) {
+  // Retained private callers pass the original options object directly.
+  helperArgs(options);
   const headers = await readHeaderConfiguration(options);
-  if (options.check) return { configuration_valid: true, token_acquisition_attempted: false };
   try {
+    const machine = options.machineConfig ? await readMachineConfiguration(options.machineConfig) : undefined;
+    if (options.check) return { configuration_valid: true, token_acquisition_attempted: false };
+    if (machine) {
+      const token = await getMachineIdentityToken(machine, machineDependencies);
+      return { Authorization: `Bearer ${token}`, ...headers };
+    }
     const invocation = gcloudInvocation(options);
     const { stdout } = await execute(invocation.executable, invocation.args, {
       encoding: 'utf8', timeout: 7000, maxBuffer: 64 * 1024, windowsHide: true,
@@ -94,14 +119,14 @@ export async function produceHelperOutput(options, execute = executeFile) {
     if (token.length > 16000 || !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(token)) throw new Error();
     return { Authorization: `Bearer ${token}`, ...headers };
   } catch (error) {
-    if (requiresReauthentication(error)) throw new ReauthenticationRequired();
+    if (!options.machineConfig && requiresReauthentication(error)) throw new ReauthenticationRequired();
     throw new Error(SAFE_FAILURE);
   }
 }
 
-export async function main(args, output = process.stdout, errors = process.stderr, execute = executeFile) {
+export async function main(args, output = process.stdout, errors = process.stderr, execute = executeFile, machineDependencies = {}) {
   try {
-    const result = await produceHelperOutput(parseHelperArgs(args), execute);
+    const result = await produceHelperOutput(parseHelperArgs(args), execute, machineDependencies);
     output.write(JSON.stringify(result) + '\n');
     return 0;
   } catch (error) {

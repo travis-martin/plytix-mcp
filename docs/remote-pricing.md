@@ -81,6 +81,11 @@ identity, exact hostname and resource limits before executing those actions.
 
 ## Native Codex connection
 
+For unattended Windows desktop access, use the reviewed
+[TPM-backed machine identity](machine-authentication.md). It obtains Cloud Run
+tokens without a personal Google session. The developer account/gcloud mode below
+remains available; the two authentication modes are mutually exclusive.
+
 For an existing authorized local developer account, use a direct HTTPS MCP
 connection with Codex's `http_headers_helper`. The reusable configuration is
 `deploy/codex-http.template.toml`; replace only the verified service hostname,
