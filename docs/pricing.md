@@ -13,6 +13,51 @@ automatically confirms a learned business rule.
 
 ## Workflow
 
+### Read-only owner audit
+
+Use `pricing_audit` when the task is to compare supplier-sheet costs without
+changing products or persisting knowledge. Supply the original source identity,
+hash, extracted rows/references, calculations and explicit product/family owner
+mappings. The tool always uses proposal-only learning. It returns current values,
+calculated complete-item costs, source references, calculation traces and
+matched/difference/protected/blocked states, without creating an import, plan, review,
+dictionary entry or executable approval.
+
+The request accepts `source_name`, `source_sha256`, `sku_column`, optional
+`source_context`, source `rows: [{source_ref, values}]`, calculation `rules`, and
+`mappings: [{row_index, product_id, family_id, rule_id}]`. Limits are 100 rows,
+100 mappings and 10 rules per call. Each mapping names its intended rule rather
+than relying on overlapping automatic category selection. The result identifies
+`kind: "pricing_audit"`, `persisted: false`, `executable: false` and an
+`audit_digest` for evidence; that digest is not a price approval token.
+
+Ownership is determined from each family's live attribute level and the owner's
+actual ancestry. Audit the owner once. Current dimensions, currency/unit basis,
+identity associations and applicable rule conditions still matter. A source
+unit price is not a full-sheet amount until the reviewed dimensional calculation
+has been performed. Per-item quotes can validate size without multiplying by it.
+
+The audit does not fetch inheriting descendants or validate a proposed write's
+descendant effects. Large/deep hierarchies can therefore be checked at owner
+level without pretending the current execution bounds were satisfied. A result
+cannot be passed to apply. When a difference is approved for correction, use a
+fresh ordinary import/plan and retain every protection, descendant/override and
+exact-approval requirement below. No differences means no product writes are
+needed.
+
+Source rates accept up to 18 fractional digits, preserving spreadsheet precision
+until final full-item rounding. Mutation amounts and adjustment operands retain
+their existing six-place limit. Store the original cached and displayed values
+separately in extraction evidence; choose the precision policy explicitly. Do
+not round a displayed rate prematurely or execute source formulas to obtain it.
+
+For workflows that need persistent private imports/plans/reviews but no automatic
+knowledge learning, use `learning_mode: "proposal_only"` on the existing draft
+tools instead. This is distinct from the audit's zero-persistence contract.
+The [knowledge maintenance guide](knowledge-maintenance.md) describes source
+interpretation and the [history standard](change-history.md) describes subsequent
+authorized knowledge saves.
+
 ### Open the editable review
 
 Review creation, reading, preparation and refresh advertise the shared MCP App,

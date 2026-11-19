@@ -195,7 +195,7 @@ describe('pricing workflow', () => {
         const names = (await client.listTools()).tools.map(t => t.name);
         expect(names.includes('pricing_apply')).toBe(writes.size > 0);
         if (writes.size) {
-          const result = await client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 1, rules: [] } });
+          const result = await client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 1, rules: [] } });
           expect(result.isError).toBe(true);
           expect(JSON.stringify(result)).toContain('approval');
           expect((await f.service.rulesGet()).revision).toBe(1);
@@ -402,7 +402,7 @@ describe('pricing workflow', () => {
         try {
           const rules = await client.callTool({ name: 'pricing_rules_get', arguments: {} });
           expect((rules.structuredContent as any).data.rules).toHaveLength(password === 'fixture' ? 1 : 0);
-          const denied = await client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 1, rules: [] } });
+          const denied = await client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 1, rules: [] } });
           expect(denied.isError).toBe(true); expect(JSON.stringify(denied)).toContain('approval');
         } finally { await client.close(); }
       }

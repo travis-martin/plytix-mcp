@@ -4,6 +4,7 @@ import { PlytixError } from '../types.js';
 import type { PricingStore } from './store.js';
 import type { PricingRule } from './model.js';
 import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority, recordProvenanceSchema, reviewMetadataSchema, selectRecordProvenance } from './provenance.js';
+import { HISTORY_POLICY, revisionContextSchema, versionHistoryPointer } from './version-history.js';
 
 const KEY = 'dictionary.json';
 export const PRICING_MEMORY_LIMIT = 500;
@@ -42,6 +43,8 @@ export type MemoryEntry = z.infer<typeof entry>;
 /** Shared validation for offline portable exports; does not expose storage access. */
 export const memoryEntrySchema = entry;
 const documentSchema = z.object({
+  revision_context: revisionContextSchema.optional(),
+  version_history: versionHistoryPointer.optional(),
   version: z.literal(1), revision: z.number().int().nonnegative(), updated_at: z.string(),
   entries: z.array(entry).max(PRICING_MEMORY_LIMIT),
   // Bounded correction history retains exact previous advisory definitions.
@@ -115,6 +118,7 @@ export class PricingMemory {
       (!args.query || normalize([item.value.term, item.value.canonical_term ?? '', item.value.definition].join(' ')).includes(normalize(args.query))));
     const entries = matches.slice((args.page - 1) * args.page_size, args.page * args.page_size);
     return { revision: document.revision, updated_at: document.updated_at, entries,
+      version_history: document.version_history, history_policy: HISTORY_POLICY,
       total: document.entries.length, matched: matches.length, page: args.page, page_size: args.page_size,
       has_more: args.page * args.page_size < matches.length, retained_history_revisions: document.history.length,
       advisory, live_validation_required: true as const,
@@ -188,6 +192,7 @@ export class PricingMemory {
           at, revision: document.revision + 1, operation: ruleIndex ? 'rule_sync' : 'automatic_observation',
         });
         document.revision++; document.updated_at = at;
+        document.revision_context = { operation: ruleIndex ? 'rule_sync' : 'automatic_observation' };
       }
       return documentSchema.parse(document);
     });
@@ -238,6 +243,7 @@ export class PricingMemory {
         });
         document.history = [...document.history, { revision: document.revision, at, previous }].slice(-20);
         document.revision++; document.updated_at = at;
+        document.revision_context = { operation: 'user_save', review: args.review };
       }
       return documentSchema.parse(document);
     });

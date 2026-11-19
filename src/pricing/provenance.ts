@@ -27,6 +27,7 @@ export const provenanceSourceSchema = z.object({
 /** Attribution supplied with an approved tool call is evidence, not authenticated
  * identity or an independent grant of approval. Never accept approval flags here. */
 export const reviewMetadataSchema = z.object({
+  change_id: z.string().regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]{7,127}$/).optional(),
   sources: z.array(provenanceSourceSchema).min(1).max(8),
   reason: z.string().trim().min(1).max(1500),
   reviewer: z.string().trim().min(1).max(160).optional(),

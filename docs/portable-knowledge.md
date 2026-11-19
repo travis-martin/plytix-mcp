@@ -99,6 +99,11 @@ or follow it correctly; use a review checkpoint before consequential changes.
 
 ## Maintenance and limits
 
+Follow [Change Record Standard v1](change-history.md) for the canonical save,
+readback, export refresh and any rollback. Reusable Markdown is versioned in Git;
+generated organization Markdown retains the canonical source revisions and
+predecessor checksum. Use the same source/reason references on every platform.
+
 Keep one authoritative runtime workspace and regenerate dated exports. Editing
 a copy does not synchronize or update the MCP. Submit corrections through the
 existing reviewed tools with the current revision, then regenerate. Preserve
@@ -107,7 +112,9 @@ old exports for traceability rather than silently merging independent versions.
 This is a snapshot of retained pricing guidance, not a full backup or a promise
 that every chat decision was saved. It excludes credential bindings, secrets,
 source documents, private imports/plans/reviews/execution audits and the separate
-general knowledge store. History and advisory retention are bounded upstream.
+general knowledge store. It also excludes the full immutable revision archive;
+use the history tooling and backend backups for that chain. Embedded per-record
+history and the active advisory dictionary remain bounded working views.
 Per-record sources and review history are available on 0.14 servers; missing
 legacy history stays unknown. See [knowledge maintenance](knowledge-maintenance.md)
 for retention, provenance and calculation-policy compatibility.

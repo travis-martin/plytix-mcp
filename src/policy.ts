@@ -9,9 +9,10 @@ export const WRITE_TOOLS = new Set([
 ]);
 
 export const READ_TOOLS = new Set([
+  'pricing_history_get',
   'catalog_workspace',
   'approval_capabilities', 'approval_check',
-  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_review_refresh', 'pricing_dictionary_get', 'pricing_guidance_get',
+  'pricing_rules_get', 'pricing_plan_get', 'pricing_review_get', 'pricing_review_refresh', 'pricing_dictionary_get', 'pricing_guidance_get', 'pricing_audit',
   'discovery_guide', 'catalog_dictionary', 'knowledge_status',
   'products_lookup', 'products_get', 'products_get_full', 'products_search', 'products_find',
   'families_list', 'families_get', 'families_list_attributes', 'families_list_all_attributes',

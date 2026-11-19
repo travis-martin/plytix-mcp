@@ -1,4 +1,4 @@
-import { PRICING_LIMITS, lengthUnit, type PricingChange, type PricingRule, type SourceRow } from './model.js';
+import { PRICING_LIMITS, lengthUnit, sourceDecimal, type PricingChange, type PricingRule, type SourceRow } from './model.js';
 import { PlytixError, type PlytixProduct } from '../types.js';
 import { provenanceDigest } from './provenance.js';
 
@@ -14,8 +14,8 @@ export function assertReusableCostRules(incoming: PricingRule[], previous: Prici
 }
 
 /** Decimal rational arithmetic: no eval, binary rounding, percentages or unit conversion inferred. */
-function fraction(value: string): [bigint, bigint] {
-  if (!/^-?\d{1,12}(?:\.\d{1,6})?$/.test(value)) throw new PlytixError('Pricing amount must be a plain decimal without currency or grouping separators');
+function fraction(value: string, source = false): [bigint, bigint] {
+  if (!(source ? sourceDecimal.safeParse(value).success : /^-?\d{1,12}(?:\.\d{1,6})?$/.test(value))) throw new PlytixError('Pricing amount must be a plain decimal without currency or grouping separators');
   const [whole, part = ''] = value.split('.');
   return [BigInt(whole + part), 10n ** BigInt(part.length)];
 }
@@ -39,7 +39,7 @@ function positiveDimension(value: unknown): [string, bigint, bigint] {
 }
 
 export function calculateWithTrace(rule: PricingRule, row: SourceRow, product?: PlytixProduct): { value: number; trace?: PricingChange['calculation_trace'] } {
-  let [n, d] = fraction(row.values[rule.source_column] ?? '');
+  let [n, d] = fraction(row.values[rule.source_column] ?? '', true);
   let trace: PricingChange['calculation_trace'];
   const basis = rule.full_item_cost;
   if (basis) {

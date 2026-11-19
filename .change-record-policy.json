@@ -1,0 +1,7 @@
+{
+  "schema_version": 1,
+  "name": "Plytix Change Record Standard",
+  "baseline_commit": "0c5e689d89f45fe31702845fb1e1ea6cac7c1230",
+  "subject_types": ["build", "chore", "ci", "docs", "feat", "fix", "perf", "refactor", "revert", "test"],
+  "required_trailers": ["Change-Id", "Reason", "Sources", "Validation", "Rollback"]
+}

@@ -8,7 +8,12 @@ import { memoryGetInput, memoryUpdateInput } from '../pricing/memory.js';
 import { PricingDictionaryService } from '../pricing/dictionary.js';
 import { PricingGuidanceService } from '../pricing/guidance-service.js';
 import { guidanceGetInput, guidanceSaveInput } from '../pricing/guidance.js';
+import { reviewMetadataSchema } from '../pricing/provenance.js';
+import { PricingHistoryService } from '../pricing/history-service.js';
+import { historyGetInput } from '../pricing/version-history.js';
 import { PricingService } from '../pricing/service.js';
+import { PricingAuditService } from '../pricing/audit.js';
+import { auditInput } from '../pricing/audit-model.js';
 import { PricingReviewService } from '../pricing/review.js';
 import { reviewApplyInput, reviewCreateInput, reviewGetInput, reviewPlanInput, reviewUpdateInput } from '../pricing/review-model.js';
 
@@ -19,9 +24,16 @@ const json = (data: unknown) => {
 };
 export function registerPricingTools(server: McpServer, client: PlytixClient) {
   const pricing = new PricingService(client);
+  const audit = new PricingAuditService(client);
   const reviews = new PricingReviewService(client);
   const dictionary = new PricingDictionaryService(client);
   const guidance = new PricingGuidanceService(client);
+  const history = new PricingHistoryService(client);
+  registerTool(server, 'pricing_history_get', {
+    title: 'Read Retained Knowledge Revisions',
+    description: 'Read immutable workflow, dictionary or rule revisions reachable from the current committed head. Includes content hashes, before/after digest links, sources and review metadata. Unreferenced CAS candidates are not history. Use include_snapshots=true with limit=1 to capture one full revision for offline rollback preparation. Never writes, restores, learns or changes products.',
+    inputSchema: historyGetInput.shape,
+  }, async (args: z.infer<typeof historyGetInput>) => ({ ...json(await history.get(args)), resultMetadata: { source: 'local', freshness: 'cached' } }));
   registerTool(server, 'pricing_guidance_get', {
     title: 'Read Required Pricing Workflow Guidance',
     description: 'Read BEFORE every pricing task. Returns protected user instructions and enforced pricing exclusions, current revision/digest and storage scope. Global instructions apply alongside family/source-specific guidance. Explicit business constraints take precedence over learned suggestions; live Plytix remains authoritative for catalog facts. For editing, load unfiltered with include_retired=true so no existing instruction is omitted.',
@@ -30,8 +42,13 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   registerTool(server, 'pricing_guidance_save', {
     title: 'Save Protected Pricing Workflow Guidance',
     description: 'Save the complete user-reviewed instruction/exclusion set at expected_revision. Preserve every existing ID; retire explicitly instead of omitting. Supply review sources and reason for changes; altering an active exclusion requires them. Conflicting source evidence does not override a protection: resolve with the user first. Server records per-record before/after history; supplied reviewer attribution is not approval. Requires the write allowlist and normal host approval. Changes invalidate plans; never changes products or executes text.',
-    inputSchema: guidanceSaveInput.shape,
+    inputSchema: { ...guidanceSaveInput.shape, review: reviewMetadataSchema },
   }, async (args: z.infer<typeof guidanceSaveInput>) => ({ ...json(await guidance.save(args)), resultMetadata: { source: 'local', freshness: 'not_applicable' } }));
+  registerTool(server, 'pricing_audit', {
+    title: 'Audit Supplier Costs Without Changes',
+    description: 'Compare explicitly mapped cost owners to source rows and calculation rules using current family inheritance, ancestry, numeric schema, source associations, units and dimensions. Always proposal-only: never stores imports, plans, dictionary learning or products. Supports source rates with up to 18 fractional digits and rounds only the final amount. Returns matched, difference, protected or blocked evidence, never an executable plan. Descendants and their overrides are not inspected; any later update needs a fresh pricing_plan and exact approval.',
+    inputSchema: auditInput.shape,
+  }, async (args: z.infer<typeof auditInput>) => json(await audit.compare(args)));
   registerTool(server, 'pricing_dictionary_get', {
     title: 'Read Pricing Workflow Dictionary',
     description: 'Read paged supplier/source/family-scoped terminology, mappings and setup observations with source and per-record change/review history. Missing legacy history is unknown. All entries are advisory and require current Plytix validation; stale_source=false does not certify freshness. Use scope to prevent reusing unrelated meanings.',
@@ -39,8 +56,8 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   }, async (args: z.infer<typeof memoryGetInput>) => ({ ...json(await dictionary.get(args)), resultMetadata: { source: 'local', freshness: 'cached' } }));
   registerTool(server, 'pricing_dictionary_update', {
     title: 'Save Pricing Workflow Definitions',
-    description: 'Save compact advisory definitions from a price list or catalog inspection at the current dictionary revision. Automatically record extracted terms, colors, materials and setup notes as proposed; each proposal requires evidence with source type and reference (plus source_sha256 when available). Use user_defined only for explicit user corrections; retire outdated meanings. Does not confirm pricing rules or change Plytix. Never copy prices, product records or full option lists. Current Plytix remains authoritative.',
-    inputSchema: memoryUpdateInput.shape,
+    description: 'Save reviewed advisory definitions at the current dictionary revision after the separate knowledge proposal is approved. Requires review sources and reason. Extracted terms, colors, materials and setup notes use proposed status and source evidence (plus source_sha256 when available). Use user_defined only for explicit user corrections; retire outdated meanings. Does not confirm pricing rules or change Plytix. Never copy prices, product records or full option lists. Current Plytix remains authoritative.',
+    inputSchema: { ...memoryUpdateInput.shape, review: reviewMetadataSchema },
   }, async (args: z.infer<typeof memoryUpdateInput>) => ({ ...json(await dictionary.update(args)), resultMetadata: { source: 'local', freshness: 'not_applicable' } }));
   registerTool(server, 'pricing_import', {
     title: 'Import a Price List and Suggest Families',
@@ -51,7 +68,7 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
     title: 'Review Pricing Rules', description: 'Read versioned confirmed/proposed calculation rules, conditions and restrictions with storage-scope metadata. Set learning_mode=proposal_only to return advisory index candidates without saving them. Also read pricing_guidance_get for protected workflow instructions and exclusions.', inputSchema: { learning_mode: learningMode.optional() },
   }, async ({ learning_mode }: { learning_mode?: LearningMode }) => json(await pricing.rulesGet(learning_mode)));
   registerTool(server, 'pricing_rules_save', {
-    title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at expected_revision with optional review sources/reason. New or changed reusable supplier-cost rules require full_item_cost using current catalog dimensions and explicit source price units; do not encode a previous stock length or area as a fixed multiplier. Arithmetic adjustments must declare pricing_adjustment and have reviewed evidence. Old unchanged rules/history remain readable. Requires exact host approval and write allowlist; proposed rules never execute. Does not change Plytix products.', inputSchema: rulesInput.shape,
+    title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at expected_revision with required review sources/reason. New or changed reusable supplier-cost rules require full_item_cost using current catalog dimensions and explicit source price units; do not encode a previous stock length or area as a fixed multiplier. Arithmetic adjustments must declare pricing_adjustment and have reviewed evidence. Old unchanged rules/history remain readable. Requires exact host approval and write allowlist; proposed rules never execute. Does not change Plytix products.', inputSchema: { ...rulesInput.shape, review: reviewMetadataSchema },
   }, async (args: z.infer<typeof rulesInput>) => json(await pricing.rulesSave(args)));
   registerTool(server, 'pricing_plan', {
     title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule_ids or private one-run batch_rules to calculate differences against live numeric values, inheritance and restrictions. batch_rules do not save or activate shared rules and still require exact approval of final changes. learning_mode inherits the import unless explicitly supplied; proposal_only retains advisory candidates in the private plan without dictionary writes. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,

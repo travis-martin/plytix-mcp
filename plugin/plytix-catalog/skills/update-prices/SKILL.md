@@ -22,6 +22,30 @@ Start the user-facing review with candidate family mappings and their evidence: 
 
 Resolve ambiguous products explicitly. Verify current family assignments and required schema. Distinguish manufacturer/brand identity from supplier identity, and never assume similar names are equivalent. Read `pricing_guidance_get` again with the selected `family_ids` and known `source_context: {supplier?, source_namespace?}`. Include applicable required instructions and pricing exclusions in the review. Unknown source context must not be used to dismiss a potentially applicable instruction.
 
+## Audit without changing prices or knowledge
+
+For a read-only price check, use `pricing_audit` with extracted source rows,
+source hash/references, explicit owner mappings and the reviewed calculations.
+It always uses proposal-only learning and returns source/current/calculated
+comparisons without creating imports, plans, reviews or dictionary records.
+It returns no executable approval or plan identifier. Show each configured owner
+once; do not repeat inherited products in the comparison.
+
+The audit verifies current family configuration, owner ancestry, relevant schema,
+source identity, conditions and full-item dimensions. It does not read descendant
+prices or certify descendant effects for a later update. A matched audit row is
+not an executable plan. If a correction is subsequently requested, prepare a
+fresh ordinary pricing plan and perform all descendant/override, protection and
+approval checks. Never bypass execution safeguards by using an audit result.
+
+Preserve full source-rate precision and round the final complete-item cost using
+the reviewed policy. Supported source-rate input accepts up to 18 fractional
+digits; final mutation amounts and adjustment operands retain their existing
+limits. If the source cannot be represented exactly, retain its original value
+and report the limitation instead of silently changing the rate. A displayed
+two-decimal cell is not necessarily the stored rate used by the workbook.
+Keep both values, the chosen sequence and its evidence in the audit.
+
 ## Build the proposal
 
 Use `pricing_plan` with `import_id`, confirmed `rule_ids` or private one-run `batch_rules`, and explicit mappings containing `row_index`, `product_id`, and `family_id`. Private batch calculations do not save or activate shared rules; exact final value approval is still required. Do not require persistent rule storage for a one-off update. Group compatible mappings up to 100 product/attribute comparisons per plan instead of making one plan call per row. The plan must compare current live values with source and calculated values, including currency, unit/pack conversion, rounding, discounts or markups, effective dates, conditions, restrictions, and maximum change thresholds supported by the reviewed rule schema. If a needed restriction or calculation cannot be represented, block that row instead of approximating it. Use the same reviewed calculation to explain or verify the existing value when appropriate; report discrepancies without automatically correcting them.
@@ -92,12 +116,29 @@ Save an explicit owner request to add or change an enduring instruction or excep
 Use scoped text instructions for review requirements and supported structured exclusions for enforceable price protections. Exclusions match explicit family IDs and AND conditions over current scalar attribute values; optional exact target attributes narrow their scope. Do not approximate an unsupported condition or execute free-text code. Keep business-specific exceptions in the configured store, never in reusable plugin source. Automatic source learning belongs in proposed dictionary records and cannot overwrite this protected guidance.
 
 Supply `review: {sources: [{kind, reference, sha256?, observed_at?}], reason,
-reviewer?}` when making an explicit correction. Sources may be user, document,
+reviewer?, change_id?}` for every deliberate guidance, dictionary or shared-rule save.
+Sources may be user, document,
 Plytix, pricing-rule or other evidence using the tool's enum spelling. Any change
 to an existing active exclusion requires source and reason. Reviewer attribution
 is not authenticated approval. The server keeps per-record before/after history;
 never import replacement histories, invent legacy dates or imply an automatic
 observation was user-reviewed.
+
+Follow the versioned Change Record Standard for source, reason, attribution,
+validation and rollback records. The configured pricing store retains immutable
+document revisions in addition to bounded record-level provenance. Confirm the
+saved revision/history head after a knowledge change, then refresh the portable
+export with predecessor lineage. A failed or conflicted candidate snapshot is
+not a committed change. Use `pricing_history_get` to identify prior committed
+content and prepare a rollback through the existing reviewed save flow at current
+revisions. Never overwrite runtime files, delete intervening history, invent
+legacy provenance or treat a knowledge rollback as permission to change products.
+
+Use a stable `review.change_id` shared with the related Git `Change-Id` and private
+review record. The archive's own `change_id` is a server-generated content hash,
+not this supplied correlation reference. Use the offline `plytix-pricing-history`
+rollback candidate generator, then the usual import prepare/preflight and reviewed
+save tools; the generator itself has no runtime-write or credential path.
 
 For portable imports, use `plytix-pricing-import` draft/prepare/preflight with a
 verified baseline export, editable candidate, fresh full capture and reviewed
@@ -111,7 +152,7 @@ knowledge guide for exact capture and CLI syntax.
 
 Use `pricing_rules_save` with `expected_revision` and the complete reviewed rule set through its configured exact approval flow. Record proposed associations, aliases, family mapping evidence, conditions/restrictions, important review attributes, formulas/conversions/rounding, verification tolerances, reviewer/date and source references in supported rule fields. Preserve existing rules and decisions; a one-off exception must not silently become a global rule.
 
-Automatically save compact, useful document terminology and setup observations with `pricing_dictionary_update`; this saves advisory drafts in the configured private or organization scope and needs no extra pricing approval form. First read the scoped dictionary's current revision, then send `expected_revision` and `entries: [{value: {kind, term, definition, scope, canonical_term?, attribute_labels?}, status: "proposed", evidence: {source: "document", reference, source_sha256?}, note?}]`. Proposed entries require evidence: use the actual source type (`document`, `plytix`, `pricing_rule` or `user`), a compact source reference and the original source hash when available. Include the filename, page/row and date in that reference; rule evidence can also include `rules_revision` and `rule_status`. Supported kinds are `terminology`, `color`, `material`, `brand`, `series`, `supplier`, `family_mapping`, `attribute_setup`, `product_setup` and `review_attribute`. Each scope needs a supplier or source namespace; add a family ID where applicable. Preserve uncertainty explicitly rather than guessing equivalence. Reuse existing terms rather than duplicating them, and reconcile revision conflicts by reading again.
+Automatically save compact, useful document terminology and setup observations with `pricing_dictionary_update` only when the user's scope permits learning saves; proposal-only requests keep these candidates unsaved. This saves advisory drafts in the configured private or organization scope and needs no extra pricing approval form. Supply the required review sources and reason. First read the scoped dictionary's current revision, then send `expected_revision` and `entries: [{value: {kind, term, definition, scope, canonical_term?, attribute_labels?}, status: "proposed", evidence: {source: "document", reference, source_sha256?}, note?}]`. Proposed entries require evidence: use the actual source type (`document`, `plytix`, `pricing_rule` or `user`), a compact source reference and the original source hash when available. Include the filename, page/row and date in that reference; rule evidence can also include `rules_revision` and `rule_status`. Supported kinds are `terminology`, `color`, `material`, `brand`, `series`, `supplier`, `family_mapping`, `attribute_setup`, `product_setup` and `review_attribute`. Each scope needs a supplier or source namespace; add a family ID where applicable. Preserve uncertainty explicitly rather than guessing equivalence. Reuse existing terms rather than duplicating them, and reconcile revision conflicts by reading again.
 
 Use `user_defined` only for the user's explicitly requested advisory definition or correction, and `retired` when the user retires a definition. Do not silently promote inferred terms or overwrite protected definitions; surface pending conflicts. Executable formulas, currency/unit conversions, rounding, effective dates, conditions and restrictions still belong in the reviewed `pricing_rules_save` flow. A dictionary entry never authorizes a product update or makes a calculation executable.
 

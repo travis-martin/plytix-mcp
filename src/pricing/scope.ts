@@ -35,9 +35,9 @@ export function resolvePricingScope(fingerprint: string, configured = process.en
   };
 }
 
-export const SHARED_PRICING_FILES = ['rules.json', 'rules-revision-*.json', 'dictionary.json', 'workflow.json'] as const;
+export const SHARED_PRICING_FILES = ['rules.json', 'rules-revision-*.json', 'dictionary.json', 'workflow.json', 'history-*.json'] as const;
 export function isSharedPricingFile(key: string): boolean {
-  return /^(?:rules|rules-revision-\d+|dictionary|workflow)\.json$/.test(key);
+  return /^(?:rules|rules-revision-\d+|dictionary|workflow|history-(?:workflow|dictionary|rules)-[a-f0-9]{64})\.json$/.test(key);
 }
 
 /** Safe status fields omit the credential fingerprint and do not claim live authentication. */

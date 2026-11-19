@@ -29,7 +29,7 @@ export async function readBoundedJson(path: string): Promise<unknown> {
  * Never steal a lock: an interrupted writer requires an operator to inspect it.
  */
 export async function updateJsonFile<T>(
-  path: string, load: () => Promise<T>, change: (value: T) => T,
+  path: string, load: () => Promise<T>, change: (value: T) => T | Promise<T>,
 ): Promise<T> {
   await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const lockPath = `${path}.lock`;
@@ -44,7 +44,7 @@ export async function updateJsonFile<T>(
   if (!lock) throw new Error('Knowledge store is busy; retry or ask the operator to inspect the lock');
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    const value = change(await load());
+    const value = await change(await load());
     const text = JSON.stringify(value, null, 2);
     if (Buffer.byteLength(text) > MAX_BYTES) throw new Error('Knowledge store exceeds size limit');
     const file = await open(temporary, 'wx', 0o600);

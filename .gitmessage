@@ -1,0 +1,9 @@
+type(scope): describe the resulting behavior
+
+Describe the concrete problem and change when the subject is not sufficient.
+
+Change-Id: replace-with-stable-change-reference
+Reason: replace-with-why-this-change-is-needed
+Sources: replace-with-document-issue-or-decision-references
+Validation: replace-with-checks-and-observed-results
+Rollback: replace-with-forward-revert-or-reviewed-restore-procedure

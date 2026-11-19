@@ -4,6 +4,7 @@ import { PlytixError, type PlytixProduct } from '../types.js';
 import type { PricingStore } from './store.js';
 import { label } from './model.js';
 import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority, recordProvenanceSchema, reviewMetadataSchema, selectRecordProvenance } from './provenance.js';
+import { HISTORY_POLICY, revisionContextSchema, versionHistoryPointer } from './version-history.js';
 
 const KEY = 'workflow.json';
 const text = z.string().trim().min(1).max(200);
@@ -36,6 +37,8 @@ const snapshotFields = {
 };
 const guidanceHistory = z.object(snapshotFields).strict();
 export const guidanceDocument = z.object({
+  revision_context: revisionContextSchema.optional(),
+  version_history: versionHistoryPointer.optional(),
   version: z.literal(1), ...snapshotFields,
   history: z.array(guidanceHistory).max(20).default([]),
   record_provenance: recordProvenanceSchema.optional(),
@@ -145,6 +148,7 @@ export class PricingGuidance {
     const instructions = applicableInstructions(document, args);
     const exclusions = document.exclusions.filter(item => (args.include_retired || item.status === 'active') && matchesFamilies(item.family_ids, args.family_ids));
     return { version: document.version, revision: document.revision, digest: guidanceDigest(document), updated_at: document.updated_at,
+      version_history: document.version_history, history_policy: HISTORY_POLICY,
       instructions, exclusions,
       record_provenance: selectRecordProvenance(document.record_provenance, [
         ...instructions.map(item => `instruction:${item.id}`), ...exclusions.map(item => `exclusion:${item.id}`),
@@ -178,7 +182,8 @@ export class PricingGuidance {
         before: keyed(current), after: keyed(args), at, revision: current.revision + 1,
         operation: 'user_save', review: args.review, review_keys: keyed(args).map(item => item.key),
       });
-      return guidanceDocument.parse({ version: 1, revision: current.revision + 1, updated_at: at, instructions: args.instructions, exclusions: args.exclusions, history, record_provenance });
+      return guidanceDocument.parse({ version: 1, revision: current.revision + 1, updated_at: at, instructions: args.instructions, exclusions: args.exclusions, history, record_provenance,
+        revision_context: { operation: 'user_save', review: args.review } });
     });
     return { ...updated, digest: guidanceDigest(updated), authority };
   }

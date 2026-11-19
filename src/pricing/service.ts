@@ -11,6 +11,7 @@ import { PricingMemory } from './memory.js';
 import { learnImport, learnPlan, learningProposal, proposeRuleLearning } from './learning.js';
 import { applicableInstructions, evaluatePricingExclusions, guidanceDigest, guidanceInstruction, hasActiveGuidance, readGuidance, type GuidanceDocument } from './guidance.js';
 import { materialGroup, PricingSnapshot, stockLabels } from './snapshot.js';
+import { HISTORY_POLICY } from './version-history.js';
 
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
@@ -93,7 +94,7 @@ export class PricingService {
     const rules = await this.readRules(directory);
     const learning = mode === 'proposal_only' ? proposeRuleLearning(rules.rules, rules.revision)
       : rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
-    return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null, provenance_authority: provenanceAuthority,
+    return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null, provenance_authority: provenanceAuthority, history_policy: HISTORY_POLICY,
       sharing: `${directory.scope?.guidance ?? 'Pricing files are private to this credential pair.'} Rules never authorize writes.` };
   }
   async rulesSave(input: z.infer<typeof rulesInput>) {
@@ -115,6 +116,7 @@ export class PricingService {
       assertReusableCostRules(input.rules, previous.rules);
       const at = new Date().toISOString();
       return rulesDocument.parse({ revision: previous.revision + 1, updated_at: at, rules: input.rules,
+        revision_context: { operation: 'user_save', review: input.review },
         record_provenance: appendRecordProvenance(previous.record_provenance, {
           before: previous.rules.map(value => ({ key: `rule:${value.id}`, value })),
           after: input.rules.map(value => ({ key: `rule:${value.id}`, value })), at, revision: previous.revision + 1,

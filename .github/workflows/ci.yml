@@ -10,11 +10,15 @@ jobs:
         node: [22, 24]
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
       - run: npm ci --ignore-scripts
+      - run: node --test scripts/change-record.test.mjs
+      - run: node scripts/check-change-record.mjs --ci
       - run: npm run test:all
       - run: npm run plugin:build
       - run: npm run plugin:check

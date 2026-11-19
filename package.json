@@ -1,6 +1,6 @@
 {
   "name": "plytix-mcp",
-  "version": "0.15.0",
+  "version": "0.16.0",
   "type": "module",
   "description": "Read-only by default MCP tools for Plytix product data, schema, assets and relationships.",
   "keywords": [
@@ -18,7 +18,8 @@
     "plytix-mcp": "dist/index.js",
     "plytix-knowledge-admin": "dist/knowledge/admin.js",
     "plytix-pricing-export": "dist/pricing/export-cli.js",
-    "plytix-pricing-import": "dist/pricing/import-cli.js"
+    "plytix-pricing-import": "dist/pricing/import-cli.js",
+    "plytix-pricing-history": "dist/pricing/history-cli.js"
   },
   "files": [
     "dist/",
@@ -27,11 +28,17 @@
     "docs/portable-knowledge.md",
     "docs/knowledge-maintenance.md",
     "docs/pricing-provenance.md",
+    "docs/change-history.md",
+    "CHANGELOG.md",
+    "CONTRIBUTING.md",
     "docs/security.md",
     "docs/api-coverage.md",
     "LICENSE"
   ],
   "scripts": {
+    "prepare": "node scripts/install-history-hooks.mjs",
+    "history:check": "node scripts/check-change-record.mjs --ci",
+    "history:test": "node --test scripts/change-record.test.mjs",
     "dev": "tsx src/index.ts",
     "dev:http": "tsx src/http-main.ts",
     "build": "tsc && node scripts/build-ui.mjs",
@@ -48,7 +55,8 @@
     "test:all": "npm run typecheck && npm run build && npm test",
     "knowledge:admin": "tsx src/knowledge/admin.ts",
     "pricing:export": "node dist/pricing/export-cli.js",
-    "pricing:import": "node dist/pricing/import-cli.js"
+    "pricing:import": "node dist/pricing/import-cli.js",
+    "pricing:history": "node dist/pricing/history-cli.js"
   },
   "engines": {
     "node": ">=22"

@@ -1,11 +1,14 @@
 import { join, resolve } from 'node:path';
+import { link, mkdir, open, unlink } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import { Storage, type Bucket } from '@google-cloud/storage';
 import { readBoundedJson, updateJsonFile } from '../knowledge/store.js';
 import { PlytixError } from '../types.js';
 import { isSharedPricingFile, pricingScopeStatus, resolvePricingScope, type PricingScopeStatus } from './scope.js';
+import { retainVersionHistory, sameRevisionArchive, type RevisionArchive } from './version-history.js';
 
 const MAX_BYTES = 8 * 1024 * 1024;
-const keyPattern = /^(?:rules|dictionary|workflow|rules-revision-\d+|[a-f0-9-]{36})\.json$/;
+const keyPattern = /^(?:rules|dictionary|workflow|rules-revision-\d+|history-(?:workflow|dictionary|rules)-[a-f0-9]{64}|[a-f0-9-]{36})\.json$/;
 function checkKey(key: string) {
   if (!keyPattern.test(key)) throw new PlytixError('Invalid pricing storage key');
 }
@@ -59,11 +62,29 @@ export class FilePricingStore implements PricingStore {
       return value;
     });
   }
-  update<T>(key: string, parse: (value: unknown | undefined) => T, change: (value: T) => T) {
+  private async archive(key: string, value: RevisionArchive) {
     checkKey(key);
-    return updateJsonFile(join(this.directory, key), async () => parse(await this.read(key)), current => {
-      const value = change(current); encode(value); return value;
-    });
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    const temporary = join(this.directory, `.${key}.${randomUUID()}.tmp`);
+    const file = await open(temporary, 'wx', 0o600);
+    try {
+      try { await file.writeFile(encode(value)); await file.sync(); } finally { await file.close(); }
+      // Publish the fully flushed inode without replacing an existing archive.
+      // A process interruption can leave a temporary file, never a partial head.
+      try { await link(temporary, join(this.directory, key)); }
+      catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
+        if (!sameRevisionArchive(await this.read(key), value)) throw new PlytixError('Immutable version history conflict');
+      }
+    } finally { await unlink(temporary); }
+  }
+  update<T>(key: string, parse: (value: unknown | undefined) => T, change: (value: T) => T): Promise<T> {
+    checkKey(key);
+    if (key.startsWith('history-')) throw new PlytixError('Version history archives are immutable');
+    return updateJsonFile<unknown>(join(this.directory, key), () => this.read(key), async raw => {
+      const value = change(parse(structuredClone(raw))); encode(value);
+      return retainVersionHistory(key, raw, value, { read: id => this.read(id), create: (id, archive) => this.archive(id, archive) });
+    }) as Promise<T>;
   }
 }
 
@@ -137,17 +158,34 @@ export class GcsPricingStore implements PricingStore {
   }
   async read(key: string) { return this.decode(await this.backend.read(this.path(key))); }
   async create(key: string, value: unknown) {
+    if (/^(workflow|dictionary|rules)\.json$/.test(key)) {
+      await this.update(key, value => value, current => {
+        if (current !== undefined) throw new PlytixError('Pricing document already exists');
+        return value;
+      });
+      return;
+    }
     try { await this.backend.write(this.path(key), encode(value), 0); }
     catch (error) {
       if (error instanceof PricingStoreConflict) throw new PlytixError('Pricing document already exists');
       throw error;
     }
   }
+  private async archive(key: string, value: RevisionArchive) {
+    try { await this.backend.write(this.path(key), encode(value), 0); }
+    catch (error) {
+      if (!(error instanceof PricingStoreConflict)) throw error;
+      if (!sameRevisionArchive(await this.read(key), value)) throw new PlytixError('Immutable version history conflict');
+    }
+  }
   async update<T>(key: string, parse: (value: unknown | undefined) => T, change: (value: T) => T): Promise<T> {
     const path = this.path(key);
+    if (key.startsWith('history-')) throw new PlytixError('Version history archives are immutable');
     for (let attempt = 0; attempt < 5; attempt++) {
       const previous = await this.backend.read(path);
-      const value = change(parse(this.decode(previous)));
+      const raw = this.decode(previous);
+      const next = change(parse(structuredClone(raw)));
+      const value = await retainVersionHistory(key, raw, next, { read: id => this.read(id), create: (id, archive) => this.archive(id, archive) });
       const bytes = encode(value);
       // Repeated dictionary observations do not need another object generation.
       if (previous?.bytes.equals(bytes)) return value;

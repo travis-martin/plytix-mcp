@@ -1,0 +1,2 @@
+#!/bin/sh
+exec node scripts/check-change-record.mjs --message-file "$1"

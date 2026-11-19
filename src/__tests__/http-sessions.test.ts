@@ -42,7 +42,7 @@ async function setup(approval?: 'APPROVE' | 'NO' | 'EMPTY' | 'CHECK', maximum = 
 }
 it.each(['standard', 'openai/form', 'openai/elicitation/create'] as const)('round-trips exact approval over authenticated HTTP (%s) and persists the approved rules', async route => {
   const f = await setup('APPROVE', 4, route);
-  const result = await f.client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } });
+  const result = await f.client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } });
   expect(result.isError).not.toBe(true);
   expect(result.structuredContent).toMatchObject({ data: { revision: 1 } });
   expect(JSON.stringify(f.requests)).toContain('expected_revision');
@@ -52,7 +52,7 @@ it.each(['standard', 'openai/form', 'openai/elicitation/create'] as const)('roun
 });
 it.each([undefined, 'NO', 'EMPTY', 'CHECK'] as const)('refuses remote writes without exact human form approval (%s)', async approval => {
   const f = await setup(approval);
-  const result = await f.client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } });
+  const result = await f.client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } });
   expect(result.isError).toBe(true);
   const rules = await f.client.callTool({ name: 'pricing_rules_get', arguments: {} });
   expect(rules.structuredContent).toMatchObject({ data: { revision: 0 } });
@@ -68,7 +68,7 @@ it('exposes negotiated support and checks native form input without approving a 
   expect(check.structuredContent).toMatchObject({ data: { verified: true, write_authorized: false } });
   expect(f.requests).toHaveLength(1);
   expect(beginWrite).not.toHaveBeenCalled();
-  const attemptedWrite = await f.client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } });
+  const attemptedWrite = await f.client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } });
   expect(attemptedWrite.isError).toBe(true);
   expect(beginWrite).not.toHaveBeenCalled();
   expect((await f.client.callTool({ name: 'pricing_rules_get', arguments: {} })).structuredContent).toMatchObject({ data: { revision: 0 } });
@@ -86,7 +86,7 @@ it('deleting a session cancels a pending approval before its handler can mutate'
   const save = vi.spyOn(PricingService.prototype, 'rulesSave');
   let arrived!: () => void; const shown = new Promise<void>(resolve => { arrived = resolve; });
   f.client.setRequestHandler(ElicitRequestSchema, async () => { arrived(); return await new Promise<never>(() => {}); });
-  const call = f.client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } }).then(result => result, () => null);
+  const call = f.client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } }).then(result => result, () => null);
   await shown;
   await f.transport.terminateSession();
   await f.client.close();
@@ -99,7 +99,7 @@ it('shutdown cancels pending approvals and refuses newly initialized sessions', 
   const save = vi.spyOn(PricingService.prototype, 'rulesSave');
   let arrived!: () => void; const shown = new Promise<void>(resolve => { arrived = resolve; });
   f.client.setRequestHandler(ElicitRequestSchema, async () => { arrived(); return await new Promise<never>(() => {}); });
-  const call = f.client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } }).then(result => result, () => null);
+  const call = f.client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } }).then(result => result, () => null);
   await shown;
   await f.app.locals.closeApprovalSessions();
   await f.client.close();

@@ -1,0 +1,2 @@
+# Git hooks must stay executable by Git's shell on every platform.
+/.githooks/* text eol=lf

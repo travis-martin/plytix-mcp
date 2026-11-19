@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recordProvenanceSchema, reviewMetadataSchema } from './provenance.js';
+import { revisionContextSchema, versionHistoryPointer } from './version-history.js';
 
 export const PRICING_LIMITS = { import_rows: 100, plan_changes: 100, review_lines: 1000, search_page_size: 100, search_pages: 10 } as const;
 export const label = z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/);
@@ -7,6 +8,9 @@ export const learningMode = z.enum(['automatic', 'proposal_only']);
 export type LearningMode = z.infer<typeof learningMode>;
 const text = z.string().trim().min(1).max(200);
 export const decimal = z.string().regex(/^-?\d{1,12}(?:\.\d{1,6})?$/);
+// Supplier workbook caches can retain more precision than displayed quotes.
+// Keep that input exact; executable output/adjustment limits remain unchanged.
+export const sourceDecimal = z.string().regex(/^-?\d{1,12}(?:\.\d{1,18})?$/);
 export const lengthUnit = z.enum(['mm', 'cm', 'm', 'in', 'ft']);
 export const priceUnit = z.enum(['item', 'mm', 'cm', 'm', 'in', 'ft', 'mm2', 'cm2', 'm2', 'in2', 'ft2']);
 const calculationOperation = z.object({ op: z.enum(['multiply', 'divide', 'add', 'subtract']), operand: decimal,
@@ -33,7 +37,7 @@ export const fullItemCostSchema = z.object({
   if (!expected) ctx.addIssue({ code: 'custom', message: 'Source price unit does not match the reviewed price basis', path: ['price_unit'] });
 });
 export const calculationTraceSchema = z.object({
-  source_column: text, source_price: decimal, price_basis: z.enum(['item', 'length', 'area']), price_unit: priceUnit,
+  source_column: text, source_price: sourceDecimal, price_basis: z.enum(['item', 'length', 'area']), price_unit: priceUnit,
   price_unit_column: text,
   dimensions: z.array(z.object({
     product_attribute: label, product_value: decimal, product_unit: lengthUnit,
@@ -118,6 +122,8 @@ export const applyInput = z.object({ plan_id: z.string().uuid(), digest: z.strin
 export const rulesInput = z.object({ expected_revision: z.number().int().nonnegative(), rules: z.array(ruleSchema).max(100),
   review: reviewMetadataSchema.optional() }).strict();
 export const rulesDocument = z.object({
+  revision_context: revisionContextSchema.optional(),
+  version_history: versionHistoryPointer.optional(),
   revision: z.number().int().nonnegative(), updated_at: z.string(), rules: z.array(ruleSchema).max(100),
   record_provenance: recordProvenanceSchema.optional(),
   // History is atomically stored with the current rules; archive copies are extra.

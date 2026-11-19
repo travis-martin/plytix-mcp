@@ -57,6 +57,13 @@ and revision-linked export refreshes. Reusable full-item costing reads current
 dimensions; scoped exclusions remain enforced until a reviewed correction.
 See [knowledge maintenance and compatibility](docs/knowledge-maintenance.md).
 
+Version 0.16 adds a zero-persistence owner pricing audit, retained immutable
+knowledge/rule revisions and reviewed rollback preparation. Future source and
+Markdown commits use the same required change-record fields, enforced by a
+tracked hook and CI. See [change history and rollback](docs/change-history.md)
+and [contributing](CONTRIBUTING.md). Existing product-write approvals remain
+unchanged.
+
 Version 0.13.0 provides 52 default read/draft tools and 25 separately allowlisted
 write tools (77 total when all catalog/pricing writes are enabled). Default form
 mode requires the supported approval integration; private operator connections

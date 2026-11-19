@@ -153,7 +153,7 @@ it.each([false, true])('authenticated HTTP host mode persists rules without elic
   } } });
   await client.connect(transport);
   cleanup.push(async () => { if (approvalSessions) await transport.terminateSession(); await client.close(); });
-  const saved = await client.callTool({ name: 'pricing_rules_save', arguments: { expected_revision: 0, rules: [] } });
+  const saved = await client.callTool({ name: 'pricing_rules_save', arguments: { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [] } });
   expect(saved.isError).not.toBe(true);
   expect(saved.structuredContent).toMatchObject({ data: { revision: 1 } });
   expect(upstream).toHaveBeenCalledOnce();

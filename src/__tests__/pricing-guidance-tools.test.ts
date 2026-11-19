@@ -29,7 +29,7 @@ const instruction = { id: 'full_item_cost', title: 'Store full item cost', text:
 const exclusion = { id: 'custom_color', title: 'Protect custom color', status: 'active', family_ids: ['fixture-family'], target_attributes: [],
   all: [{ attribute: 'color_name', operator: 'equals', values: ['Custom violet'] }],
   reason: 'A custom quoted price must not follow the ordinary price list.', source_ref: 'Explicit owner instruction, fixture conversation' };
-const saveArguments = { expected_revision: 0, instructions: [instruction], exclusions: [exclusion] };
+const saveArguments = { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, instructions: [instruction], exclusions: [exclusion] };
 function authenticate() {
   return vi.spyOn(globalThis, 'fetch').mockImplementation(async url => {
     if (String(url) !== 'https://auth.plytix.com/auth/api/get-token') throw new Error('Unexpected fixture upstream destination');

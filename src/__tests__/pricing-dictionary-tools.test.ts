@@ -51,9 +51,9 @@ it('advertises advisory drafts without write permission while preserving API mut
   const names = (await session.client.listTools()).tools.map(item => item.name);
   expect(names).toContain('pricing_dictionary_update'); expect(names).toContain('pricing_dictionary_get');
   expect(names).not.toContain('products_update'); expect(names).not.toContain('pricing_rules_save');
-  expect((await session.call('pricing_dictionary_update', { expected_revision: 0, entries: [{ value: definition, status: 'proposed' }] })).isError).toBe(true);
+  expect((await session.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, entries: [{ value: definition, status: 'proposed' }] })).isError).toBe(true);
   expect(fetch).not.toHaveBeenCalled();
-  const saved = await session.call('pricing_dictionary_update', { expected_revision: 0, entries: [proposal] });
+  const saved = await session.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, entries: [proposal] });
   expect(saved.isError).not.toBe(true); expect(saved.structuredContent.data.revision).toBe(1);
   const read = await session.call('pricing_dictionary_get', { scope: { supplier: 'Fixture supplier' } });
   expect(read.structuredContent.data.entries[0]).toMatchObject({ status: 'proposed', evidence: [evidence], live_validation_required: true });
@@ -66,14 +66,14 @@ it('advertises advisory drafts without write permission while preserving API mut
 
 it('isolates private dictionaries by credentials and reauthenticates before every access', async () => {
   const fetch = authenticate(), alice = await connect(), bob = await connect('fixture-password-b');
-  await alice.call('pricing_dictionary_update', { expected_revision: 0, entries: [proposal] });
+  await alice.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, entries: [proposal] });
   expect((await bob.call('pricing_dictionary_get')).structuredContent.data.total).toBe(0);
   expect(alice.path).not.toBe(bob.path);
   expect((await alice.call('pricing_dictionary_get')).structuredContent.data.total).toBe(1);
   const before = await readFile(join(alice.path, 'dictionary.json'), 'utf8');
   fetch.mockResolvedValue(new Response('private-upstream-failure', { status: 401 }));
   const deniedRead = await alice.call('pricing_dictionary_get');
-  const deniedWrite = await alice.call('pricing_dictionary_update', { expected_revision: 1, entries: [proposal] });
+  const deniedWrite = await alice.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 1, entries: [proposal] });
   expect(deniedRead.isError).toBe(true); expect(deniedWrite.isError).toBe(true);
   expect(JSON.stringify(deniedRead)).not.toContain('private-upstream-failure');
   expect(await readFile(join(alice.path, 'dictionary.json'), 'utf8')).toBe(before);
@@ -82,10 +82,10 @@ it('isolates private dictionaries by credentials and reauthenticates before ever
 
 it('rejects stale revisions and cannot confirm executable rules through dictionary definitions', async () => {
   authenticate(); const session = await connect();
-  await session.call('pricing_dictionary_update', { expected_revision: 0, entries: [proposal] });
-  const stale = await session.call('pricing_dictionary_update', { expected_revision: 0, entries: [proposal] });
+  await session.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, entries: [proposal] });
+  const stale = await session.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, entries: [proposal] });
   expect(stale.isError).toBe(true); expect(JSON.stringify(stale)).toContain('changed');
-  expect((await session.call('pricing_dictionary_update', { expected_revision: 1, entries: [{ ...proposal, status: 'reviewed_rule' }] })).isError).toBe(true);
+  expect((await session.call('pricing_dictionary_update', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 1, entries: [{ ...proposal, status: 'reviewed_rule' }] })).isError).toBe(true);
   expect((await session.call('pricing_dictionary_get')).structuredContent.data.revision).toBe(1);
   await expect(readFile(join(session.path, 'rules.json'))).rejects.toMatchObject({ code: 'ENOENT' });
 });
@@ -194,7 +194,7 @@ it('indexes saved rules, imports and validated plans without changing full rule 
   vi.spyOn(session.api, 'getFamily').mockResolvedValue({ data: [{ id: 'family', name: 'Sheet family' }] });
   vi.spyOn(session.api, 'getFamilyAllAttributes').mockResolvedValue({ data: [{ id: 'attr-cost', name: 'Cost', label: 'cost', attribute_level: 'parent_level' }] });
   vi.spyOn(session.api, 'getAttributeById').mockResolvedValue({ id: 'attr-cost', name: 'Cost', label: 'cost', type_class: 'DecimalAttribute' });
-  const saved = await session.call('pricing_rules_save', { expected_revision: 0, rules: [rule] });
+  const saved = await session.call('pricing_rules_save', { review: { sources: [{ kind: 'user', reference: 'Fixture request' }], reason: 'Fixture update' }, expected_revision: 0, rules: [rule] });
   expect(saved.isError).not.toBe(true); expect(saved.structuredContent.data.learning.status).toBe('stored');
   const before = await readFile(join(session.path, 'rules.json'), 'utf8');
   expect(JSON.parse(before).rules).toEqual([rule]);

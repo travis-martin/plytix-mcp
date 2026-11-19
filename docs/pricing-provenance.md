@@ -14,8 +14,9 @@ origin `legacy_history_unknown`. Newly created tracked records use
 
 ## Supplying review evidence
 
-The existing guidance, dictionary and shared-rule save inputs accept an optional
-`review` object:
+From version 0.16, deliberate guidance, dictionary and shared-rule saves require
+a `review` object. Existing stored documents remain readable without invented
+review metadata. Use the same source/reason convention across calling platforms:
 
 ```json
 {
@@ -26,7 +27,8 @@ The existing guidance, dictionary and shared-rule save inputs accept an optional
     }
   ],
   "reason": "The owner reviewed the corrected supplier scope.",
-  "reviewer": "Catalog owner"
+  "reviewer": "Catalog owner",
+  "change_id": "change-20261118-chemcast-knowledge-history"
 }
 ```
 
@@ -36,6 +38,11 @@ characters and may include a SHA-256 hash and an actual `observed_at` timestamp.
 The reason is required and limited to 1,500 characters. The reviewer name is
 optional and limited to 160 characters. Do not invent a reviewer or observation
 date when the source does not establish one.
+
+An optional `change_id` is an 8–128 character stable reference using letters,
+digits, `.`, `_`, `:`, or `-`, starting with a letter or digit. Use the same value
+as the Git `Change-Id` for related work. This supplied correlation reference is
+different from the archive's server-generated content-addressed `change_id`.
 
 Review metadata records supplied attribution, not authenticated identity or a
 new permission grant. `reviewer_identity: caller_supplied_not_authenticated`
@@ -67,13 +74,23 @@ history as evidence, but cannot replace server history through a save payload.
 Content hashes detect accidental edits and link consecutive retained snapshots;
 they are not signatures or proof that a reviewer identity was authenticated.
 
-Retention is bounded to 16 events per record and 2 MiB of provenance per pricing
-document, within the existing overall 8 MiB file limit. The oldest events can be
-dropped, with `dropped_events` recording the omitted prefix. Older removed-record
-histories can be discarded with `omitted_records` incremented. The latest complete
-event for every current tracked record is preserved; a mutation fails if that
-minimum history cannot fit. Keep independent backups when a complete historical
-audit is needed.
+The embedded working view is bounded to 16 events per record and 2 MiB of
+provenance per pricing document, within the existing overall 8 MiB file limit.
+The oldest embedded events can be dropped, with `dropped_events` recording the
+omitted prefix. Older removed-record histories can be discarded from this view
+with `omitted_records` incremented. The latest complete event for every current
+tracked record is preserved; a mutation fails if that minimum history cannot fit.
+
+Version 0.16 additionally retains immutable document snapshots in the configured
+local/GCS backend with no automatic archive pruning. The current history head
+identifies the committed chain; failed-write candidates are not committed history.
+Archive capture precedes the current-file update and a capture failure blocks the
+save. Legacy contents become a baseline on the first upgraded write. This archive
+preserves revisions beyond the embedded working window; it cannot reconstruct
+history already lost before installation. See the
+[change history standard](change-history.md) for rollback, storage and backup
+limits. External administrators and storage lifecycle policies remain outside
+the application's retention guarantee.
 
 Scoped guidance reads and paginated dictionary reads return provenance only for
 the records returned. Dictionary responses label this
@@ -83,6 +100,12 @@ portable export of current records; do not sum their repeated global
 that current-record export.
 
 ## Release compatibility
+
+Version 0.16 adds the version-history head to canonical pricing documents. All
+readers and writers sharing that backend must support it before the first
+upgraded save. A prior executable alone is not a safe rollback after new-format
+documents are written. Preserve archive snapshots and use a compatible reviewed
+restore path; never strip new history fields to force an old binary to load.
 
 Older servers use strict document schemas and cannot read documents containing
 the new `record_provenance` field. Deploy a compatible version to every writer
