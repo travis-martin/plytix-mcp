@@ -22,14 +22,19 @@ let guidance = { revision: 3, digest: 'c'.repeat(64), updated_at: '2026-11-03T00
   storage_scope: { kind: 'organization', id: 'fixture-organization' }, storage_backend: { kind: 'local', shared_backend_required: true },
 };
 window.fixtureChangeGuidance = () => { guidance.revision++; guidance.digest = 'd'.repeat(64); };
-const line = (suffix, state = 'pending', extra = {}) => ({ line_id: `line-${suffix}`, status: state, change: { ...clone(change), sku: `SHEET-${suffix}`, product_id: `fixture-${suffix.toLowerCase()}`, row_index: suffix.charCodeAt(0) - 65, source_ref: `Supplier price list · page 1, row ${suffix.charCodeAt(0) - 63}` }, provenance: { plan_id: plan.plan_id, import_id: '22222222-2222-4222-8222-222222222222', row_index: suffix.charCodeAt(0) - 65, rule_id: 'fixture-price', mapping: { product_id: `fixture-${suffix.toLowerCase()}`, family_id: 'fixture-family' } }, source: { source_name: 'Fixture supplier price list.pdf', source_ref: `Page 1, row ${suffix.charCodeAt(0) - 63}`, source_sha256: 'b'.repeat(64), source_column: 'Price', source_values: { SKU: `SHEET-${suffix}`, Price: suffix === 'B' ? '25.20' : suffix === 'F' ? '10.00' : '12.50', Width: '48', Length: '96' } }, ...extra });
+const line = (suffix, state = 'pending', extra = {}) => ({ line_id: `line-${suffix}`, status: state, change: { ...clone(change), sku: `SHEET-${suffix}`, product_id: `fixture-${suffix.toLowerCase()}`, row_index: suffix.charCodeAt(0) - 65, source_ref: `Supplier price list · page 1, row ${suffix.charCodeAt(0) - 63}` }, provenance: { plan_id: plan.plan_id, import_id: '22222222-2222-4222-8222-222222222222', row_index: suffix.charCodeAt(0) - 65, rule_id: 'fixture-price', mapping: { product_id: `fixture-${suffix.toLowerCase()}`, family_id: 'fixture-family' } }, source: { source_name: 'Fixture supplier price list.pdf', source_ref: `Page 1, row ${suffix.charCodeAt(0) - 63}`, source_sha256: 'b'.repeat(64), source_column: 'Price', source_values: { SKU: `SHEET-${suffix}`, Price: suffix === 'B' ? '25.20' : suffix === 'F' ? '10.00' : '12.50', tier: 'Full pallet', source_width: '48', source_length: '96', source_dimension_unit: 'in', alternative_reason: 'Matches current raw sheet; the 60 × 120 alternative is not used.' } }, ...extra });
 const initialReview = { review_id: reviewId, revision: 0, title: 'Fixture supplier · sheet price review', lines: [
   line('A'), line('B', 'pending', { change: { ...clone(change), sku: 'SHEET-B', product_id: 'fixture-b', old_value: 24, new_value: 25.2, row_index: 1, source_ref: 'Supplier price list · page 1, row 3' } }),
   line('C', 'blocked', { change: undefined, reason: 'Source currency is not stated. Confirm it before preparing this line.' }),
   line('D', 'needs_revision', { instruction: 'Use the full-sheet amount after confirming the pack size.', proposed_value: '13.25' }),
   line('E', 'rejected', { instruction: 'Discontinued item — exclude from this update.' }),
   line('F', 'unchanged', { change: { ...clone(change), sku: 'SHEET-F', product_id: 'fixture-f', old_value: 10, new_value: 10, row_index: 5, source_ref: 'Supplier price list · page 1, row 7' } }),
-] };
+], coverage: [
+  { coverage_id: 'coverage-missing', kind: 'missing_source', label: 'Unlisted thickness', sku: 'SHEET-G', product_id: 'fixture-g', family_id: 'fixture-family', attribute: 'price', current_value: 17, reason: 'This source has no price for the catalog thickness. Keep the existing cost.', source_name: 'Fixture supplier price list.pdf', source_ref: 'Page 1, complete table checked' },
+  { coverage_id: 'coverage-protected', kind: 'protected_custom', label: 'Custom color', sku: 'SHEET-H', product_id: 'fixture-h', attribute: 'price', current_value: 22, reason: 'A custom contract price is protected from ordinary list updates.' },
+  { coverage_id: 'coverage-alternative', kind: 'unused_alternative', label: '60 × 120 in source sheet', source_ref: 'Page 2, alternate table', reason: 'Reviewed owners use 48 × 96 in raw sheets.', details: { tier: 'Full pallet', alternative_reason: 'Different complete raw-sheet size; no area-ratio substitution.' } },
+  { coverage_id: 'coverage-unresolved', kind: 'unresolved_mapping', label: 'Unrecognized source series', source_ref: 'Page 3, row 4', reason: 'No verified catalog family mapping. Retain for review without proposing a cost.' },
+], learning_proposals: [{ plan_id: plan.plan_id, learning: { status: 'proposal_only', saved: 0, truncated: false, candidates: [{ value: { kind: 'terminology', term: 'Full pallet', definition: 'A source quantity tier; recheck the price basis and current supplier scope.', scope: { source_namespace: 'Fixture sheet list' }, attribute_labels: [] }, status: 'proposed', evidence: { source: 'document', reference: 'Fixture sheet list, page 1' } }] } }] };
 let review = clone(initialReview);
 let preparedLineIds = [];
 window.fixtureBlockApproval = false;
@@ -45,6 +50,7 @@ window.fixtureLargeReview = (status = 'selected') => {
 };
 window.fixtureOpenReview = async (reviewPanel = false) => { await bridge.sendToolInput({ arguments: { review_id: reviewId } }); await bridge.sendToolResult(envelope({ tabs: ['products', 'dictionary', 'pricing'], review_id: reviewId, review_panel: reviewPanel })); };
 window.fixtureResetReview = () => { review = clone(initialReview); preparedLineIds = []; window.fixtureBatchLimit = 100; window.fixtureChangedLine = null; window.fixtureBlockApproval = false; };
+window.fixtureCoverageOnly = () => { review = { ...clone(initialReview), revision: review.revision + 1, lines: [] }; preparedLineIds = []; };
 window.fixtureCompletePrepared = () => { for (const id of preparedLineIds) { const row = review.lines.find(line => line.line_id === id); row.execution = { status: 'verified', message: 'Fixture readback matches the approved amount.' }; } review.revision++; };
 window.fixturePendingBatch = () => {
   const states = ['verified', 'validation_pending', 'queued', 'failed', 'conflict', 'sending_or_unknown', 'submitted'];

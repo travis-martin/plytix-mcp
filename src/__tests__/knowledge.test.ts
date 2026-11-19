@@ -104,6 +104,22 @@ it('learns only structural observations and shares them with explicitly bound co
   } finally { await bob.close(); await carol.close(); }
 });
 
+it('suppresses shared schema learning for a proposal-only dictionary read while returning compact candidates', async () => {
+  const { path, store } = await fixture();
+  const session = await connect(path);
+  try {
+    const before = await store.read();
+    const result = await session.call('catalog_dictionary', { learning_mode: 'proposal_only' });
+    expect(result.isError).not.toBe(true);
+    expect(result.structuredContent.metadata.learning.status).toBe('proposal_only');
+    expect(result.structuredContent.data.live_schema.attributes).toEqual([schema]);
+    expect(result.structuredContent.data.pricing_learning.candidates[0].value.term).toBe('thickness');
+    expect(await store.read()).toEqual(before);
+    await session.call('catalog_dictionary');
+    expect((await store.read()).observations).toHaveLength(1);
+  } finally { await session.close(); }
+});
+
 it('does not accept caller-selected scopes, a wrong password or a revoked binding', async () => {
   const { path, admin } = await fixture();
   const alice = await connect(path, envA, true);

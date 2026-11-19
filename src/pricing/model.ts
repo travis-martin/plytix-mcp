@@ -3,6 +3,8 @@ import { recordProvenanceSchema, reviewMetadataSchema } from './provenance.js';
 
 export const PRICING_LIMITS = { import_rows: 100, plan_changes: 100, review_lines: 1000, search_page_size: 100, search_pages: 10 } as const;
 export const label = z.string().regex(/^[a-zA-Z0-9_-]{1,160}$/);
+export const learningMode = z.enum(['automatic', 'proposal_only']);
+export type LearningMode = z.infer<typeof learningMode>;
 const text = z.string().trim().min(1).max(200);
 export const decimal = z.string().regex(/^-?\d{1,12}(?:\.\d{1,6})?$/);
 export const lengthUnit = z.enum(['mm', 'cm', 'm', 'in', 'ft']);
@@ -52,6 +54,7 @@ export const importInput = z.object({
   source_sha256: z.string().regex(/^[a-f0-9]{64}$/),
   sku_column: text,
   source_context: z.object({ supplier: text.optional(), source_namespace: text.optional() }).strict().optional(),
+  learning_mode: learningMode.optional(),
   csv: z.string().min(1).max(64000).optional(),
   rows: z.array(sourceRow).min(1).max(PRICING_LIMITS.import_rows).optional(),
 }).strict();
@@ -88,6 +91,7 @@ export const mappingSchema = z.object({
 }).strict();
 export const planInput = z.object({
   import_id: z.string().uuid(), rule_ids: z.array(label).max(10).default([]),
+  learning_mode: learningMode.optional(),
   // Private, one-run calculation definitions. Approval covers the resulting exact
   // changes; these definitions are never promoted to the shared rule store.
   batch_rules: z.array(ruleSchema).max(10).optional(),

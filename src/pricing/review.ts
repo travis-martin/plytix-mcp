@@ -5,7 +5,7 @@ import { PlytixError } from '../types.js';
 import { createPricingStore, type PricingStore } from './store.js';
 import { digest, PricingService, storedPlan, type StoredPlan } from './service.js';
 import { serializeWriteApprovalArguments, writeApprovalArgumentLimit } from '../tools/register.js';
-import { reviewApplyInput, reviewCreateInput, reviewDocument, reviewLine, reviewPlanInput, reviewUpdateInput, type ReviewDocument, type ReviewLine } from './review-model.js';
+import { coverageKind, reviewApplyInput, reviewCreateInput, reviewDocument, reviewLine, reviewPlanInput, reviewUpdateInput, type CoverageEntry, type ReviewDocument, type ReviewLine } from './review-model.js';
 import { PRICING_LIMITS, type PricingChange } from './model.js';
 import { PricingBatch } from './batch.js';
 import { batchRecord } from './batch-model.js';
@@ -15,6 +15,11 @@ const now = () => new Date().toISOString();
 const lockedStatuses = new Set(['executing', 'queued', 'submitted', 'validation_pending', 'sending_or_unknown', 'verified', 'unchanged']);
 type Execution = { status: string; plan_id: string; message?: string };
 type PlanCache = Map<string, StoredPlan>;
+
+function retainedCoverageOverlaps(coverage: CoverageEntry[], productId: string, attribute: string, descendants: PricingChange['descendant_impact'] = []): boolean {
+  return coverage.some(entry => entry.kind !== 'unused_alternative' && entry.product_id && (!entry.attribute || entry.attribute === attribute) &&
+    (entry.product_id === productId || descendants.some(child => child.product_id === entry.product_id && !child.overridden && child.old_value !== child.new_value)));
+}
 
 function manifestChange(line: ReviewLine, change: PricingChange): z.infer<typeof reviewApplyInput>['changes'][number] {
   const { product_id, sku, family_id, attribute, old_value, new_value, currency, unit, source_ref, inheritance_level, calculated_value, review_note, material_group } = change;
@@ -91,16 +96,21 @@ export class PricingReviewService {
   private async present(review: ReviewDocument, store: PricingStore, plans: PlanCache = new Map()) {
     const execution = await this.execution(review, store, plans);
     const lines = review.lines.map(line => ({ ...line, ...(execution.has(line.line_id) ? { execution: execution.get(line.line_id) } : {}) }));
-    const counts: Record<string, number> = { total: lines.length, pending: 0, selected: 0, rejected: 0, needs_revision: 0, blocked: 0, unchanged: 0, awaiting_approval: 0, verified: 0, sending_or_unknown: 0, skipped: 0, executing: 0 };
+    const counts: Record<string, number> = { total: lines.length, coverage: review.coverage.length, review_total: lines.length + review.coverage.length, pending: 0, selected: 0, rejected: 0, needs_revision: 0, blocked: 0, unchanged: 0, awaiting_approval: 0, verified: 0, sending_or_unknown: 0, skipped: 0, executing: 0 };
+    const coverage_counts: Record<string, number> = { total: review.coverage.length, ...Object.fromEntries(coverageKind.options.map(kind => [kind, 0])) };
+    for (const entry of review.coverage) coverage_counts[entry.kind]++;
     for (const line of lines) {
       counts[line.status]++;
       if (line.execution) counts[line.execution.status] = (counts[line.execution.status] ?? 0) + (line.execution.status === line.status ? 0 : 1);
       if (line.status === 'selected' && !lockedStatuses.has(line.execution?.status ?? '')) counts.awaiting_approval++;
     }
     const guidance = new Map<string, NonNullable<StoredPlan['guidance_binding']>>();
+    const proposedLearning = new Map<string, NonNullable<StoredPlan['learning_proposal']>>();
     for (const line of review.lines) {
-      const binding = plans.get(line.prepared_plan_id ?? line.plan_history.at(-1) ?? line.provenance.plan_id)?.guidance_binding;
+      const plan = plans.get(line.prepared_plan_id ?? line.plan_history.at(-1) ?? line.provenance.plan_id);
+      const binding = plan?.guidance_binding;
       if (binding) guidance.set(digest(binding), binding);
+      if (plan?.learning_proposal) proposedLearning.set(plan.plan_id, plan.learning_proposal);
     }
     const continuations = [];
     for (const batch of review.batches.filter(b => b.engine === 'batch' && b.state !== 'complete')) {
@@ -111,12 +121,14 @@ export class PricingReviewService {
           approval: { tool_name: 'pricing_review_apply', arguments: args } });
       }
     }
-    return { ...review, lines, counts, continuations, guidance_snapshots: [...guidance.values()], approval_required: true, instructions: 'Row decisions are drafts. Modified amounts need recalculation and fresh selection. Only exact trusted approval can execute the selected manifest. Workflow guidance shown here belongs to the saved plan revision; fresh preparation checks current protected guidance.' };
+    return { ...review, lines, counts, coverage_counts, continuations, guidance_snapshots: [...guidance.values()], learning_proposals: [...proposedLearning].map(([plan_id, learning]) => ({ plan_id, learning })), approval_required: true, instructions: 'Row decisions are drafts. Modified amounts need recalculation and fresh selection. Coverage entries are saved explanatory evidence, never selectable price changes or executable protections. Only exact trusted approval can execute the selected manifest. Workflow guidance shown here belongs to the saved plan revision; fresh preparation checks current protected guidance.' };
   }
   async get(id: string) { const store = await this.directory(); return this.present(await this.read(id, store), store); }
   async create(input: z.infer<typeof reviewCreateInput>) {
     input = reviewCreateInput.parse(input);
     if (new Set(input.plan_ids).size !== input.plan_ids.length) fail('Plan IDs must be unique');
+    const coverage = (input.coverage ?? []).map(entry => ({ ...entry, coverage_id: `coverage_${digest(entry)}` }));
+    if (new Set(coverage.map(entry => entry.coverage_id)).size !== coverage.length) fail('Coverage entries must be unique');
     const store = await this.directory(), lines: ReviewLine[] = [], targets = new Set<string>(), plans: PlanCache = new Map();
     for (const id of input.plan_ids) {
       const plan = await this.pricing.planGet(id, store); plans.set(id, plan);
@@ -139,7 +151,12 @@ export class PricingReviewService {
         }));
       }
     }
-    const review = reviewDocument.parse({ kind: 'pricing_review', review_id: randomUUID(), revision: 0, title: input.title ?? 'Price-list review', created_at: now(), updated_at: now(), lines, batches: [] });
+    for (const line of lines) {
+      const attribute = plans.get(line.provenance.plan_id)!.rule_snapshot.find(rule => rule.id === line.provenance.rule_id)!.target_attribute;
+      if (retainedCoverageOverlaps(coverage, line.provenance.mapping.product_id, attribute, line.change?.descendant_impact))
+        fail('Coverage that retains or holds a product target cannot duplicate a price comparison or a changed inheriting descendant; resolve the conflicting review evidence first');
+    }
+    const review = reviewDocument.parse({ kind: 'pricing_review', review_id: randomUUID(), revision: 0, title: input.title ?? 'Price-list review', created_at: now(), updated_at: now(), lines, coverage, batches: [] });
     await store.create(`${review.review_id}.json`, review);
     return this.present(review, store, plans);
   }
@@ -204,7 +221,9 @@ export class PricingReviewService {
     const sources = [...new Set(selected.map(line => line.provenance.plan_id))].map(id => cache.get(id)!);
     const snapshot = await this.pricing.batchSnapshot(sources, store);
     for (const line of selected) {
-      const key = `${line.provenance.import_id}/${line.provenance.rule_id}/${digest(cache.get(line.provenance.plan_id)?.input.batch_rules ?? [])}`;
+      const original = cache.get(line.provenance.plan_id)!;
+      const learningMode = original.input.learning_mode ?? original.source_snapshot.learning_mode ?? 'automatic';
+      const key = `${line.provenance.import_id}/${line.provenance.rule_id}/${digest(original.input.batch_rules ?? [])}/${learningMode}`;
       const group = groups.get(key) ?? []; group.push(line); groups.set(key, group);
     }
     for (const lines of groups.values()) {
@@ -219,7 +238,8 @@ export class PricingReviewService {
       const original = cache.get(lines[0].provenance.plan_id)!;
       const batchRule = original.input.batch_rules?.find(r => r.id === lines[0].provenance.rule_id);
       const source = await this.pricing.plan({ import_id: lines[0].provenance.import_id,
-        rule_ids: batchRule ? [] : [lines[0].provenance.rule_id], ...(batchRule ? { batch_rules: [batchRule] } : {}), mappings }, undefined, { store, persist: false, snapshot });
+        rule_ids: batchRule ? [] : [lines[0].provenance.rule_id], ...(batchRule ? { batch_rules: [batchRule] } : {}),
+        learning_mode: original.input.learning_mode ?? original.source_snapshot.learning_mode ?? 'automatic', mappings }, undefined, { store, persist: false, snapshot });
       learning.push(source.learning);
       for (const [index, line] of lines.entries()) {
         const match = (item: { row_index: number; product_id?: string; rule_id: string }) => item.row_index === line.provenance.row_index && item.product_id === line.provenance.mapping.product_id && item.rule_id === line.provenance.rule_id;
@@ -237,6 +257,8 @@ export class PricingReviewService {
         item.reason = reason; item.status = 'blocked'; delete item.change;
       }
     };
+    holdConflicts(new Map(prepared.flatMap(item => item.change && retainedCoverageOverlaps(before.coverage, item.change.product_id, item.change.attribute, item.change.descendant_impact)
+      ? [[`${item.change.product_id}/${item.change.attribute}`, 'Refreshed inherited changes conflict with retained coverage; resolve the review evidence first'] as const] : [])));
     holdConflicts(this.pricing.groupConflicts(prepared.flatMap(p => p.change ? [p.change] : []), snapshot));
     // A pending comparison does not authorize the other owners in its group.
     // Detect this during preparation, rather than wasting a write approval.

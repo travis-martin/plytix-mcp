@@ -7,6 +7,7 @@ import { KnowledgeService, searchKnowledge } from '../knowledge/service.js';
 import { registerTool } from './register.js';
 import { PricingDictionaryService } from '../pricing/dictionary.js';
 import { learnSchema } from '../pricing/learning.js';
+import { learningMode, type LearningMode } from '../pricing/model.js';
 
 export const DISCOVERY_INSTRUCTIONS = [
   'Start unfamiliar catalog work with discovery_guide, then catalog_dictionary to resolve business terms to attribute labels.',
@@ -64,18 +65,19 @@ export function registerDiscoveryTools(server: McpServer, client: PlytixClient, 
     inputSchema: {},
   }, async () => json(await knowledge.status(), { source: 'shared_knowledge', freshness: 'not_applicable' }));
 
-  registerTool<{ query?: string; page: number; page_size: number; live: boolean; include_proposals: boolean }>(
+  registerTool<{ query?: string; page: number; page_size: number; live: boolean; include_proposals: boolean; learning_mode?: LearningMode }>(
     server, 'catalog_dictionary', {
       title: 'Catalog Dictionary',
-      description: 'Resolve business terms, aliases and attribute names. Returns separately paged shared definitions, dated schema observations, optional current schema matches, and advisory pricing dictionary entries when configured. Shared-knowledge proposals are excluded by default; pricing dictionary entries retain their explicit proposed/observed status. Omit query to explore schema page by page. Multiple matches are not resolved automatically.',
+      description: 'Resolve business terms, aliases and attribute names. Returns separately paged shared definitions, dated schema observations, optional current schema matches, and advisory pricing dictionary entries when configured. Set learning_mode=proposal_only to return compact candidates without saving pricing-dictionary or shared-schema observations. Shared-knowledge proposals are excluded by default; pricing dictionary entries retain their explicit proposed/observed status. Omit query to explore schema page by page. Multiple matches are not resolved automatically.',
       inputSchema: {
         query: z.string().trim().min(1).max(160).optional(),
         page: z.number().int().positive().max(10000).default(1),
         page_size: z.number().int().positive().max(100).default(25),
         live: z.boolean().default(true).describe('Search current Plytix schema as well as shared knowledge. false reads dated knowledge only.'),
         include_proposals: z.boolean().default(false).describe('Include shared-knowledge proposals. The separate pricing dictionary always labels advisory entries by status; none are executable rules.'),
+        learning_mode: learningMode.optional(),
       },
-    }, async ({ query, page, page_size, live, include_proposals }) => {
+    }, async ({ query, page, page_size, live, include_proposals, learning_mode }) => {
       const context = await knowledge.context();
       const document = context ? await context.store.read() : undefined;
       const matches = document ? searchKnowledge(document, query ?? '', include_proposals) : { definitions: [], observations: [] };
@@ -100,9 +102,9 @@ export function registerDiscoveryTools(server: McpServer, client: PlytixClient, 
             pagination: { page, page_size, order: 'label' },
           });
           liveSchema = { status: 'available', attributes: result.data, pagination: result.pagination ?? null };
-          if (process.env.PLYTIX_PRICING_DIR || process.env.PLYTIX_PRICING_GCS_BUCKET) {
+          if (learning_mode === 'proposal_only' || process.env.PLYTIX_PRICING_DIR || process.env.PLYTIX_PRICING_GCS_BUCKET) {
             try {
-              pricingLearning = { status: 'stored', ...await learnSchema(await pricingDictionary.memory(), result.data) };
+              pricingLearning = { status: 'stored', ...await learnSchema(learning_mode === 'proposal_only' ? undefined : await pricingDictionary.memory(), result.data, learning_mode) };
             } catch {
               pricingLearning = { status: 'unavailable' };
               warnings.push('Current schema is available, but its compact pricing dictionary observation could not be saved.');

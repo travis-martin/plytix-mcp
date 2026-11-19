@@ -3,7 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { PlytixClient } from '../client.js';
 import { registerTool } from './register.js';
 import { REVIEW_UI_META } from './workspace.js';
-import { applyInput, importInput, planInput, rulesInput, PRICING_LIMITS } from '../pricing/model.js';
+import { applyInput, importInput, learningMode, planInput, rulesInput, PRICING_LIMITS, type LearningMode } from '../pricing/model.js';
 import { memoryGetInput, memoryUpdateInput } from '../pricing/memory.js';
 import { PricingDictionaryService } from '../pricing/dictionary.js';
 import { PricingGuidanceService } from '../pricing/guidance-service.js';
@@ -44,17 +44,17 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   }, async (args: z.infer<typeof memoryUpdateInput>) => ({ ...json(await dictionary.update(args)), resultMetadata: { source: 'local', freshness: 'not_applicable' } }));
   registerTool(server, 'pricing_import', {
     title: 'Import a Price List and Suggest Families',
-    description: `Read a CSV or document-reader extracted rows (maximum ${PRICING_LIMITS.import_rows}). Match exact SKUs in paginated batches and suggest product families FIRST; never infer a family assignment or update products. Supply supplier/source_namespace in source_context for reusable, scoped advisory learning. Saves a private source snapshot. Requires configured pricing storage.`,
+    description: `Read a CSV or document-reader extracted rows (maximum ${PRICING_LIMITS.import_rows}). Match exact SKUs in paginated batches and suggest product families FIRST; never infer a family assignment or update products. Supply supplier/source_namespace in source_context for reusable, scoped advisory learning. Set learning_mode=proposal_only to return and retain candidate definitions privately without updating the dictionary; automatic remains the default. Saves a private source snapshot. Requires configured pricing storage.`,
     inputSchema: importInput.shape,
   }, async (args: z.infer<typeof importInput>) => json(await pricing.importDocument(args)));
   registerTool(server, 'pricing_rules_get', {
-    title: 'Review Pricing Rules', description: 'Read versioned confirmed/proposed calculation rules, conditions and restrictions with storage-scope metadata. Also read pricing_guidance_get for protected workflow instructions and exclusions.', inputSchema: {},
-  }, async () => json(await pricing.rulesGet()));
+    title: 'Review Pricing Rules', description: 'Read versioned confirmed/proposed calculation rules, conditions and restrictions with storage-scope metadata. Set learning_mode=proposal_only to return advisory index candidates without saving them. Also read pricing_guidance_get for protected workflow instructions and exclusions.', inputSchema: { learning_mode: learningMode.optional() },
+  }, async ({ learning_mode }: { learning_mode?: LearningMode }) => json(await pricing.rulesGet(learning_mode)));
   registerTool(server, 'pricing_rules_save', {
     title: 'Save Reviewed Pricing Rules', description: 'Replace the full pricing rule set at expected_revision with optional review sources/reason. New or changed reusable supplier-cost rules require full_item_cost using current catalog dimensions and explicit source price units; do not encode a previous stock length or area as a fixed multiplier. Arithmetic adjustments must declare pricing_adjustment and have reviewed evidence. Old unchanged rules/history remain readable. Requires exact host approval and write allowlist; proposed rules never execute. Does not change Plytix products.', inputSchema: rulesInput.shape,
   }, async (args: z.infer<typeof rulesInput>) => json(await pricing.rulesSave(args)));
   registerTool(server, 'pricing_plan', {
-    title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule_ids or private one-run batch_rules to calculate differences against live numeric values, inheritance and restrictions. batch_rules do not save or activate shared rules and still require exact approval of final changes. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,
+    title: 'Preview Price Updates', description: 'After reviewing family suggestions, explicitly map document rows to products and families. Use confirmed rule_ids or private one-run batch_rules to calculate differences against live numeric values, inheritance and restrictions. batch_rules do not save or activate shared rules and still require exact approval of final changes. learning_mode inherits the import unless explicitly supplied; proposal_only retains advisory candidates in the private plan without dictionary writes. Saves a 30-minute review plan; blocked rows prevent execution of the entire plan.', inputSchema: planInput.shape,
   }, async (args: z.infer<typeof planInput>) => json(await pricing.plan(args)));
   registerTool(server, 'pricing_plan_get', {
     title: 'Read Pricing Plan and Audit', description: 'Read a private saved plan, exact proposed updates, blocked reasons, and execution/readback audit. Never retries writes.', inputSchema: { plan_id: z.string().uuid() },
@@ -64,7 +64,7 @@ export function registerPricingTools(server: McpServer, client: PlytixClient) {
   }, async (args: z.infer<typeof applyInput>) => json(await pricing.apply(args)));
   registerTool(server, 'pricing_review_create', {
     _meta: REVIEW_UI_META,
-    title: 'Create a Price Review', description: 'Combine saved plans into a durable private review with per-line source evidence, inheritance impacts and decisions. No Plytix changes. Lines start pending, blocked or unchanged; selection never authorizes a write.', inputSchema: reviewCreateInput.shape,
+    title: 'Create a Price Review', description: 'Combine saved plans and optional non-executable coverage entries into a durable private review with source evidence, inheritance impacts and decisions. Coverage can record missing source prices, protected items, unused alternatives or unresolved mappings; coverage-only drafts use plan_ids=[]. Coverage never creates a price or becomes an executable line. No Plytix changes. Lines start pending, blocked or unchanged; selection never authorizes a write.', inputSchema: reviewCreateInput.shape,
   }, async (args: z.infer<typeof reviewCreateInput>) => json(await reviews.create(args)));
   registerTool(server, 'pricing_review_get', {
     _meta: REVIEW_UI_META,

@@ -21,7 +21,7 @@ export const resultMetadataSchema = z.object({
   retryable: z.boolean().optional(),
   warnings: z.array(z.string()),
   learning: z.object({
-    status: z.enum(['stored', 'disabled', 'unavailable']),
+    status: z.enum(['stored', 'disabled', 'unavailable', 'proposal_only']),
     observations: z.number().int().nonnegative().optional(),
     revision: z.number().int().nonnegative().optional(),
   }).optional(),

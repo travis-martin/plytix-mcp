@@ -1,5 +1,22 @@
 # Validation
 
+## Version 0.15.0 — November 18, 2026
+
+- Typecheck, build and all 544 fixture tests across 43 files passed. Coverage
+  includes retained-cost ledger entries, inherited-target conflicts, preserved
+  overrides, persisted identity validation and exact approval manifest isolation.
+- Proposal-only learning leaves both advisory stores unchanged, survives saved
+  imports and replanning, and returns bounded candidates. Existing automatic
+  behavior remains the default. Partitioned plans retain their own candidates.
+- All 92 fixture browser checks passed without runtime errors. Owner rows show
+  source tier and stock size with expandable inheritance evidence. Coverage-only
+  reviews remain visible and non-executable; mobile coverage notes remain readable.
+- Plugin validation and isolated archive startup passed with four skills, 52
+  default tools, fixture credentials and networking disabled.
+- Live business updates were separately authorized and executed on the existing
+  server, not used as tests of unreleased code. This record does not claim cloud
+  deployment or activation of the new plugin version.
+
 ## Version 0.14.0 — November 18, 2026
 
 - Typecheck, build and all 530 fixture tests across 42 files passed. New cases

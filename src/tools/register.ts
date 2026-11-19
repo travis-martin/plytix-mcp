@@ -172,7 +172,7 @@ export function registerTool<TArgs extends Record<string, unknown>>(
       const execute = async (): Promise<ToolResult> => {
         if (readOnly || draftOnly) {
           const result = await handler(args);
-          try { await knowledgeServices.get(server)?.observe(name, result); }
+          try { await knowledgeServices.get(server)?.observe(name, result, args); }
           catch {
             result.resultMetadata = { ...result.resultMetadata, learning: { status: 'unavailable' }, warnings: [
               ...result.resultMetadata?.warnings ?? [],

@@ -119,6 +119,68 @@ it('keeps fresh live evidence visible when advisory storage fails', async () => 
   expect(result.structuredContent.metadata.warnings.join(' ')).toContain('could not be saved');
 });
 
+it('returns proposal-only schema candidates without touching the pricing dictionary', async () => {
+  authenticate(); const session = await connect();
+  vi.spyOn(session.api, 'searchAttributes').mockResolvedValue({ data: [schema] });
+  const result = await session.call('catalog_dictionary', { query: 'color', learning_mode: 'proposal_only' });
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent.data.live_schema.attributes).toEqual([schema]);
+  expect(result.structuredContent.data.pricing_learning).toMatchObject({ status: 'proposal_only', saved: 0,
+    candidates: [{ status: 'proposed', value: { kind: 'attribute_setup', term: 'color' }, evidence: { source: 'plytix' } }] });
+  expect(JSON.stringify(result.structuredContent.data.pricing_learning)).not.toContain('option-not-for-memory');
+  expect((await session.call('pricing_dictionary_get')).structuredContent.data.revision).toBe(0);
+  await expect(readFile(join(session.path, 'dictionary.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('preserves proposal-only mode and candidates through saved imports, plans and review replanning', async () => {
+  authenticate(); const session = await connect();
+  const rule = ruleSchema.parse({ id: 'cost_rule', name: 'Cost rule', status: 'confirmed', evidence: 'Reviewed fixture list',
+    family_ids: ['family'], target_attribute: 'cost', source_column: 'Price', currency: 'USD', currency_column: 'Currency',
+    unit: 'each', unit_column: 'Unit', operations: [], maximum: '1000', max_change_percent: 50 });
+  const product = { id: 'owner-id', sku: 'OWNER-SKU', product_family_id: 'family', product_type: 'STANDALONE' as const,
+    num_variations: 0, attributes: { cost: 10 } };
+  vi.spyOn(session.api, 'searchProducts').mockResolvedValue({ data: [product] });
+  vi.spyOn(session.api, 'getProduct').mockResolvedValue({ data: [product] });
+  vi.spyOn(session.api, 'getFamily').mockResolvedValue({ data: [{ id: 'family', name: 'Sheet family' }] });
+  vi.spyOn(session.api, 'getFamilyAllAttributes').mockResolvedValue({ data: [{ id: 'attr-cost', name: 'Cost', label: 'cost', attribute_level: 'parent_level' }] });
+  vi.spyOn(session.api, 'getAttributeById').mockResolvedValue({ id: 'attr-cost', name: 'Cost', label: 'cost', type_class: 'DecimalAttribute' });
+  const imported = (await session.call('pricing_import', { source_name: 'Fixture list', source_sha256: 'b'.repeat(64),
+    learning_mode: 'proposal_only', sku_column: 'SKU', rows: [{ source_ref: 'page 1', values: { SKU: product.sku, Price: '12', Currency: 'USD', Unit: 'each' } }] })).structuredContent.data;
+  expect(imported.learning).toMatchObject({ status: 'proposal_only', saved: 0 });
+  expect(imported.learning.candidates.length).toBeGreaterThan(0);
+  const source = JSON.parse(await readFile(join(session.path, `${imported.import_id}.json`), 'utf8'));
+  expect(source.learning_mode).toBe('proposal_only'); expect(source.learning_proposal).toEqual(imported.learning);
+  const planned = (await session.call('pricing_plan', { import_id: imported.import_id, batch_rules: [rule],
+    mappings: [{ row_index: 0, product_id: product.id, family_id: 'family' }] })).structuredContent.data;
+  expect(planned.blocked).toEqual([]); expect(planned.input.learning_mode).toBe('proposal_only');
+  expect(planned.learning).toMatchObject({ status: 'proposal_only', saved: 0 });
+  expect(planned.learning.candidates.some((item: any) => item.value.kind === 'product_setup')).toBe(true);
+  const saved = (await session.call('pricing_plan_get', { plan_id: planned.plan_id })).structuredContent.data;
+  expect(saved.learning_proposal).toEqual(planned.learning);
+  const created = (await session.call('pricing_review_create', { plan_ids: [planned.plan_id] })).structuredContent.data;
+  const review = created.review ?? created;
+  const prepared = await session.call('pricing_review_plan', { review_id: review.review_id, expected_revision: review.revision, line_ids: [review.lines[0].line_id] });
+  expect(prepared.isError, JSON.stringify(prepared)).not.toBe(true);
+  expect(JSON.stringify(prepared.structuredContent.data.learning)).toContain('proposal_only');
+  expect((await session.call('pricing_dictionary_get')).structuredContent.data.revision).toBe(0);
+  await expect(readFile(join(session.path, 'dictionary.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
+it('can inspect saved rules in proposal-only mode without indexing them into memory', async () => {
+  authenticate(); const session = await connect();
+  const rule = ruleSchema.parse({ id: 'cost_rule', name: 'Cost rule', status: 'confirmed', evidence: 'Reviewed fixture list',
+    family_ids: ['family'], target_attribute: 'cost', source_column: 'Price', currency: 'USD', currency_column: 'Currency',
+    unit: 'each', unit_column: 'Unit', operations: [], maximum: '1000', max_change_percent: 50 });
+  await mkdir(session.path, { recursive: true });
+  await writeFile(join(session.path, 'rules.json'), JSON.stringify({ revision: 1, updated_at: new Date().toISOString(), rules: [rule], history: [] }));
+  const result = await session.call('pricing_rules_get', { learning_mode: 'proposal_only' });
+  expect(result.isError).not.toBe(true);
+  expect(result.structuredContent.data.learning).toMatchObject({ status: 'proposal_only', saved: 0 });
+  expect(result.structuredContent.data.learning.candidates[0].evidence).toMatchObject({ source: 'pricing_rule', rules_revision: 1 });
+  expect((await session.call('pricing_dictionary_get')).structuredContent.data.revision).toBe(0);
+  await expect(readFile(join(session.path, 'dictionary.json'))).rejects.toMatchObject({ code: 'ENOENT' });
+});
+
 it('indexes saved rules, imports and validated plans without changing full rule records', async () => {
   const fetch = authenticate(), session = await connect('fixture-password-a', new Set(['pricing_rules_save']));
   const rule = ruleSchema.parse({ id: 'cost_rule', name: 'Cost rule', status: 'confirmed', evidence: 'Reviewed fixture list',

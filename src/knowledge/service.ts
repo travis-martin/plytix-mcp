@@ -55,8 +55,14 @@ export class KnowledgeService {
     };
   }
 
-  async observe(tool: string, result: ToolResult): Promise<void> {
+  async observe(tool: string, result: ToolResult, args: Record<string, unknown> = {}): Promise<void> {
     if (!this.registry || result.isError || !['attributes_search', 'attributes_get', 'catalog_dictionary'].includes(tool)) return;
+    // Per-call proposal mode must suppress this second, shared schema store too.
+    // Compact candidates are returned by catalog_dictionary's pricing_learning.
+    if (tool === 'catalog_dictionary' && args.learning_mode === 'proposal_only') {
+      result.resultMetadata = { ...result.resultMetadata, learning: { status: 'proposal_only' } };
+      return;
+    }
     const context = await this.context();
     if (!context?.workspace.learn_observations) {
       result.resultMetadata = { ...result.resultMetadata, learning: { status: 'disabled' } };

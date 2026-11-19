@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { PricingMemory, memoryValue, memoryScope, ruleMemoryValues, type MemoryValue } from '../pricing/memory.js';
 import { ruleSchema } from '../pricing/model.js';
 import type { PricingChange } from '../pricing/model.js';
-import { learnImport, learnPlan, learnSchema } from '../pricing/learning.js';
+import { learnImport, learnPlan, learnSchema, proposeRuleLearning } from '../pricing/learning.js';
 import type { PricingStore } from '../pricing/store.js';
 
 class FixtureStore implements PricingStore {
@@ -200,6 +200,15 @@ describe('bounded pricing workflow dictionary', () => {
 
 describe('automatic pricing workflow learning', () => {
   const source = { source_name: 'Supplier November list', source_sha256: 'b'.repeat(64), source_context: { supplier: 'Example supplier', source_namespace: 'sheet-prices' } };
+
+  it('bounds proposal-only rule candidates and reports truncation even within one large rule', () => {
+    const large = ruleSchema.parse({ ...rule(), family_ids: Array.from({ length: 20 }, (_, n) => `family-${n}`),
+      associations: [{ kind: 'supplier', column: 'Supplier', attribute: 'supplier', aliases: Array.from({ length: 100 }, (_, n) => ({ from: `Alias ${n}`, to: 'Example' })) }] });
+    const result = proposeRuleLearning([large], 3);
+    expect(result.status).toBe('proposal_only'); expect(result.saved).toBe(0);
+    expect(result.candidates).toHaveLength(1000); expect(result.truncated).toBe(true);
+    expect(result.candidates.every(item => item.status === 'proposed' && item.evidence.rules_revision === 3)).toBe(true);
+  });
 
   it('saves import headings and proposed family associations with one bounded store update', async () => {
     const store = new FixtureStore(), memory = new PricingMemory(store, () => timestamp);

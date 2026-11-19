@@ -263,10 +263,10 @@ export class PricingMemory {
 }
 
 /** Compact pointers and aliases; full calculations/conditions remain authoritative in rules.json. */
-export function ruleMemoryValues(rules: PricingRule[]): MemoryValue[] {
+export function ruleMemoryValues(rules: PricingRule[], limit = 1000): MemoryValue[] {
   const result: MemoryValue[] = [];
   for (const rule of rules) for (const value of iterateRuleMemory(rule)) {
-    if (result.length >= 1000) return result;
+    if (result.length >= limit) return result;
     result.push(value);
   }
   return result;

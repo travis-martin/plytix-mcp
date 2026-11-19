@@ -3,6 +3,28 @@ import { changeSchema, decimal, mappingSchema, PRICING_LIMITS } from './model.js
 import { transportSchema } from './batch-model.js';
 
 export const reviewStatus = z.enum(['pending', 'selected', 'rejected', 'needs_revision', 'blocked', 'unchanged']);
+/** Coverage evidence is deliberately separate from price comparisons: it has no
+ * proposed amount, decision status, plan provenance or execution binding. */
+export const coverageKind = z.enum(['missing_source', 'protected_custom', 'unused_alternative', 'unresolved_mapping']);
+const coverageFields = z.object({
+  kind: coverageKind,
+  label: z.string().trim().min(1).max(200), reason: z.string().trim().min(1).max(2000),
+  family_id: z.string().trim().min(1).max(200).optional(), product_id: z.string().trim().min(1).max(200).optional(),
+  sku: z.string().trim().min(1).max(200).optional(), attribute: z.string().trim().min(1).max(200).optional(),
+  current_value: z.number().finite().nullable().optional(),
+  source_name: z.string().trim().min(1).max(256).optional(), source_sha256: z.string().regex(/^[a-f0-9]{64}$/).optional(),
+  source_ref: z.string().trim().min(1).max(1000).optional(),
+  details: z.record(z.string().min(1).max(80), z.string().max(500)).refine(value => Object.keys(value).length <= 20, 'Coverage details must contain at most 20 fields').optional(),
+}).strict();
+function validateCoverage(value: z.infer<typeof coverageFields>, ctx: z.RefinementCtx) {
+  if (!value.product_id && !value.source_ref) ctx.addIssue({ code: 'custom', message: 'Coverage evidence requires a product ID or a source reference' });
+  if (['missing_source', 'protected_custom'].includes(value.kind) && (!value.product_id || !value.attribute))
+    ctx.addIssue({ code: 'custom', message: 'Retained-cost coverage requires an exact product ID and attribute' });
+  if (value.current_value !== undefined && !value.product_id) ctx.addIssue({ code: 'custom', message: 'An observed current value requires a product ID' });
+}
+export const coverageInput = coverageFields.superRefine(validateCoverage);
+export const coverageEntry = coverageFields.extend({ coverage_id: z.string().regex(/^coverage_[a-f0-9]{64}$/) }).superRefine(validateCoverage);
+export type CoverageEntry = z.infer<typeof coverageEntry>;
 export const reviewBinding = z.object({ review_id: z.string().uuid(), revision: z.number().int().nonnegative(), line_ids: z.array(z.string()).min(1).max(PRICING_LIMITS.plan_changes) }).strict();
 export const reviewLine = z.object({
   line_id: z.string(), status: reviewStatus,
@@ -17,12 +39,16 @@ export const reviewDocument = z.object({
   kind: z.literal('pricing_review'), review_id: z.string().uuid(), revision: z.number().int().nonnegative(),
   title: z.string().max(200), created_at: z.string(), updated_at: z.string(),
   prepared_transport: transportSchema.optional(),
-  lines: z.array(reviewLine).min(1).max(1000),
+  lines: z.array(reviewLine).max(PRICING_LIMITS.review_lines),
+  coverage: z.array(coverageEntry).max(PRICING_LIMITS.review_lines).default([]),
   batches: z.array(z.object({ batch_id: z.string().uuid(), plan_ids: z.array(z.string().uuid()), line_ids: z.array(z.string()), state: z.enum(['executing', 'complete', 'stopped', 'deferred', 'pending']), engine: z.literal('batch').optional(), manifest_digest: z.string().optional(), execution_revision: z.number().int().nonnegative().optional(), started_at: z.string(), finished_at: z.string().optional(), error: z.string().optional() })).default([]),
-});
+}).refine(value => value.lines.length > 0 || value.coverage.length > 0, 'A review requires price comparisons or coverage evidence');
 export type ReviewDocument = z.infer<typeof reviewDocument>;
 export type ReviewLine = z.infer<typeof reviewLine>;
-export const reviewCreateInput = z.object({ plan_ids: z.array(z.string().uuid()).min(1).max(50), title: z.string().trim().min(1).max(200).optional() }).strict();
+export const reviewCreateInput = z.object({
+  plan_ids: z.array(z.string().uuid()).max(50), title: z.string().trim().min(1).max(200).optional(),
+  coverage: z.array(coverageInput).max(PRICING_LIMITS.review_lines).optional(),
+}).strict().refine(value => value.plan_ids.length > 0 || (value.coverage?.length ?? 0) > 0, 'A review requires plans or coverage evidence');
 export const reviewGetInput = z.object({ review_id: z.string().uuid() }).strict();
 export const reviewUpdateInput = z.object({
   review_id: z.string().uuid(), expected_revision: z.number().int().nonnegative(),

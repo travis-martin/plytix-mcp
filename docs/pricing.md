@@ -130,6 +130,23 @@ approval. Stop the launcher to close access; reopen it if authentication expires
 
 ## Protected workflow guidance and learning
 
+For a review-before-learning task, pass `learning_mode: "proposal_only"` to
+`pricing_import`, `catalog_dictionary` and `pricing_rules_get`. The response's
+`learning` (or `pricing_learning`) contains `status: "proposal_only"`,
+`saved: 0`, and bounded `candidates` with definition, proposed status and source
+evidence. No advisory dictionary is updated. `catalog_dictionary` also suppresses
+its separate shared-schema observation side effect. Import and plan candidates
+are retained in private `learning_proposal` fields and are reviewable through
+the source snapshot and saved plan. Private draft storage still occurs.
+
+`pricing_plan.learning_mode` is optional: it inherits the import mode, and
+legacy imports default to `automatic`. New plans retain the resolved mode in
+their input. Review replanning carries it forward and keeps differently configured
+plans in separate groups. An explicit plan override affects only that plan.
+Existing callers keep automatic learning unless they select proposal-only mode.
+After reviewing candidates, use the existing revision-checked dictionary update
+workflow to save the approved subset; candidates never become executable rules.
+
 Three records have different responsibilities:
 
 | Record | Purpose | How it changes |
@@ -188,6 +205,33 @@ evicted automatically. Limits are 100 instructions and 32 exclusions, with a
 and scoped; do not store copied catalog snapshots or current prices as memory.
 
 ## Supplier and inheritance review
+
+Keep the main comparison at owner level, deduplicated by product ID and cost
+attribute. Descendant impact and preserved overrides remain safety evidence and
+can be inspected separately. Match the source row on supplier, series, thickness,
+full stock size and units, applicable color class, quantity tier, currency and
+price basis. Neither the lowest price nor thickness alone establishes a match.
+Same-thickness color sharing is qualified by that complete scope and by protected
+exceptions. A per-sheet amount at a skid tier stays a per-sheet amount; the
+quantity break is not a multiplier. Item-basis dimension bindings validate the
+complete raw sheet without multiplying the already-complete cost by area.
+
+The review's separate `coverage` ledger records `missing_source`,
+`protected_custom`, `unused_alternative` and `unresolved_mapping` evidence.
+Pass it to `pricing_review_create` with saved plan IDs, or use `plan_ids: []`
+for a coverage-only review. Entries require `kind`, `label` and `reason`;
+optional fields identify the owner/attribute, retained current value and source
+reference/hash. They have no proposed amount or execution decision. Coverage
+counts remain distinct from price-line totals and cannot enter an approval
+manifest. Ledger evidence is immutable; create a corrected review if it changes.
+An absent source price is an exception to report while retaining existing cost,
+never an implicit zero, clear, interpolation, or discontinuation.
+
+Optional normalized source headings `tier`, `source_width`, `source_length`,
+`source_dimension_unit` and `alternative_reason` make the selected tier, size
+and unused-size explanation visible in review. Keep the original printed fields
+alongside them. These are display conventions, not executable restrictions;
+reviewed rule conditions and dimension bindings enforce the actual match.
 
 Discover the catalog's actual attribute labels, options and family configuration;
 the labels below are workflow examples, not organization-specific defaults.

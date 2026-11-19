@@ -17,6 +17,23 @@ not grant approval. Missing legacy history remains unknown. See
 The Dictionary UI exposes history and collects source, reason and optional
 reviewer before attaching a guidance-save request. The request remains a draft.
 
+Keep four kinds of knowledge separate: business instructions and protections in
+workflow guidance; advisory terminology/mappings in the dictionary; executable
+arithmetic and conditions in reviewed rules; and dated catalog observations,
+source prices, supplier slots and sizes in private review evidence. An observed
+slot or dimension is not a permanent business rule. A saved alias is not proof
+that current product identity still matches.
+
+When all learning must be proposed first, use `learning_mode: "proposal_only"`
+on imports, rule reads and catalog dictionary reads. Plans inherit the import
+mode and review replanning preserves it. Candidate definitions are returned with
+source evidence instead of being saved; imports/plans retain them privately as
+`learning_proposal`. Neither the pricing dictionary nor the dictionary read's
+shared-schema store changes. The default remains automatic for compatibility.
+Review the candidates, fetch current revisions, then save only authorized
+definitions/instructions/rules through their existing tools. This mode does not
+approve a later save or disable private review records.
+
 Structured family/color exclusions remain enforced during planning and execution,
 including inherited descendant effects. A new source price does not override a
 protection. Any edit to an existing active exclusion requires review sources and

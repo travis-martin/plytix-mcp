@@ -1,6 +1,6 @@
 import { App, applyDocumentTheme, applyHostStyleVariables, type McpUiHostContext } from '@modelcontextprotocol/ext-apps';
 
-const app = new App({ name: 'Plytix Catalog Workspace', version: '0.14.0' });
+const app = new App({ name: 'Plytix Catalog Workspace', version: '0.15.0' });
 const el = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 const input = (id: string) => el<HTMLInputElement>(id).value.trim();
 const status = (message: string, error = false) => { el('status').textContent = message; el('status').className = error ? 'notice error' : ''; };
@@ -21,7 +21,13 @@ type ReviewLine = {
   provenance?: { plan_id: string; row_index: number; rule_id: string; import_id: string; mapping?: { product_id: string; family_id?: string } };
   source?: { source_name: string; source_ref: string; source_sha256: string; source_column: string; source_values: Record<string, string> };
 };
-type Review = { review_id: string; revision: number; title?: string; lines: ReviewLine[]; [key: string]: any };
+type CoverageKind = 'missing_source' | 'protected_custom' | 'unused_alternative' | 'unresolved_mapping';
+type CoverageEntry = {
+  coverage_id: string; kind: CoverageKind; label: string; reason: string;
+  family_id?: string; product_id?: string; sku?: string; attribute?: string; current_value?: number | null;
+  source_name?: string; source_sha256?: string; source_ref?: string; details?: Record<string, string>;
+};
+type Review = { review_id: string; revision: number; title?: string; lines: ReviewLine[]; coverage?: CoverageEntry[]; [key: string]: any };
 let review: Review | null = null;
 let preparedPlans: any[] = [];
 let preparedApproval: { tool_name: string; arguments: Record<string, unknown>; argument_characters?: number } | null = null;
@@ -32,6 +38,7 @@ let preparedBatch: PreparedBatch | null = null;
 const checkedLines = new Set<string>();
 let editingLines: string[] = [];
 const decisionLabels: Record<ReviewStatus, string> = { pending: 'Pending review', selected: 'Selected for approval', rejected: 'Rejected', needs_revision: 'Needs revision', blocked: 'Blocked', unchanged: 'Unchanged' };
+const coverageLabels: Record<CoverageKind, string> = { missing_source: 'Missing from source', protected_custom: 'Protected custom item', unused_alternative: 'Unused alternative', unresolved_mapping: 'Unresolved mapping' };
 
 function element(tag: string, content?: string) { const node = document.createElement(tag); if (content !== undefined) node.textContent = content; return node; }
 function clear(id: string) { const node = el(id); node.replaceChildren(); return node; }
@@ -294,13 +301,66 @@ function amount(value: unknown, currency?: string): string {
   if (!Number.isFinite(number)) return text(value);
   return `${number.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 6 })}${currency ? ` ${currency}` : ''}`;
 }
+function sourceSelection(line: ReviewLine): string[] {
+  const values = line.source?.source_values ?? {}, normalized = new Map(Object.entries(values).map(([key, value]) => [key.trim().toLowerCase().replace(/[\s-]+/g, '_'), value.trim()]));
+  const first = (...keys: string[]) => keys.map(key => normalized.get(key)).find(Boolean);
+  const result: string[] = [], tier = first('tier', 'pricing_tier', 'quantity_tier');
+  if (tier) result.push(`Tier: ${tier}`);
+  const dimensions = line.change?.calculation_trace?.dimensions;
+  const sourceDimensions = Array.isArray(dimensions) ? dimensions.filter((dimension: any) => dimension.source?.value && dimension.source?.unit) : [];
+  if (sourceDimensions.length === 2) result.push(`Source size: ${sourceDimensions.map((dimension: any) => `${dimension.source.value} ${dimension.source.unit}`).join(' × ')}`);
+  else {
+    const width = first('source_width', 'source_full_width'), length = first('source_length', 'source_full_length'), unit = first('source_dimension_unit');
+    if (width && length && unit) result.push(`Source size: ${width} × ${length} ${unit}`);
+    else if (first('width_in') && first('length_in')) result.push(`Source size: ${first('width_in')} × ${first('length_in')} in`);
+  }
+  const alternative = first('alternative_reason', 'alternate_size_reason');
+  if (alternative) result.push(`Size selection: ${alternative}`);
+  return result;
+}
+function renderCoverage() {
+  const target = clear('review-coverage'), entries = review?.coverage ?? [];
+  target.hidden = !entries.length;
+  if (!entries.length) return;
+  target.append(element('h3', `Coverage notes (${entries.length})`));
+  const explanation = element('p', 'Retained costs, exclusions and source alternatives are recorded here. These notes cannot be selected or submitted as price changes.'); explanation.className = 'muted'; target.append(explanation);
+  const counts = element('div'); counts.className = 'coverage-counts';
+  for (const [kind, label] of Object.entries(coverageLabels)) {
+    const count = entries.filter(entry => entry.kind === kind).length;
+    counts.append(badge(`${label}: ${count}`, 'neutral'));
+  }
+  target.append(counts);
+  const disclosure = element('details');
+  if (entries.some(entry => ['missing_source', 'unresolved_mapping'].includes(entry.kind))) disclosure.setAttribute('open', '');
+  disclosure.append(element('summary', 'Review coverage notes'));
+  const wrap = element('div'); wrap.className = 'table-wrap';
+  const node = element('table'); node.className = 'coverage-table';
+  const header = element('thead'), headerRow = element('tr');
+  for (const title of ['Coverage', 'Item / source', 'Reason and retained value']) { const th = element('th', title); th.setAttribute('scope', 'col'); headerRow.append(th); }
+  header.append(headerRow); node.append(header);
+  const body = element('tbody');
+  for (const entry of entries) {
+    const row = element('tr'); row.dataset.coverageId = entry.coverage_id;
+    const kind = element('td', coverageLabels[entry.kind] ?? entry.kind), item = element('td'), reason = element('td');
+    item.append(element('strong', entry.label));
+    if (entry.sku) item.append(element('small', entry.sku));
+    if (entry.source_ref) item.append(element('small', entry.source_ref));
+    if (entry.source_name) item.append(element('small', entry.source_name));
+    reason.append(element('p', entry.reason));
+    if (entry.current_value !== undefined) reason.append(element('small', `Retained value: ${entry.current_value === null ? 'Empty' : amount(entry.current_value)}${entry.attribute ? ` · ${entry.attribute}` : ''}`));
+    if (entry.details && Object.keys(entry.details).length) details(reason, 'Supporting details', entry.details);
+    if (entry.family_id || entry.product_id || entry.source_sha256) details(item, 'Evidence identifiers', { family_id: entry.family_id, product_id: entry.product_id, source_sha256: entry.source_sha256 });
+    row.append(kind, item, reason); body.append(row);
+  }
+  node.append(body); wrap.append(node); disclosure.append(wrap); target.append(disclosure);
+}
 function visibleReviewLines(): ReviewLine[] {
   if (!review) return [];
   const filter = input('review-filter'), query = input('review-search').toLocaleLowerCase();
   return review.lines.filter(line => {
     if (filter !== 'all' && (filter.startsWith('execution:') ? line.execution?.status !== filter.slice(10) : filter === 'execution' ? !line.execution : line.status !== filter)) return false;
     const c = line.change ?? {};
-    return !query || [c.sku, c.product_id, c.attribute, c.source_ref, line.source?.source_name, line.source?.source_ref, line.provenance?.mapping?.product_id, line.instruction, line.reason, line.line_id].some(value => value !== undefined && text(value).toLocaleLowerCase().includes(query));
+    return !query || [c.sku, c.product_id, c.attribute, c.source_ref, line.source?.source_name, line.source?.source_ref, line.provenance?.mapping?.product_id, line.instruction, line.reason, line.line_id, ...sourceSelection(line)].some(value => value !== undefined && text(value).toLocaleLowerCase().includes(query));
   });
 }
 function currentChecked(): ReviewLine[] { return review?.lines.filter(line => checkedLines.has(line.line_id)) ?? []; }
@@ -341,7 +401,8 @@ function renderReview(result: any, preservePrepared = false) {
   const heading = clear('review-heading'); heading.append(element('h2', next.title || 'Price-list review'));
   const id = element('p', `Review ${next.review_id} · Revision ${next.revision}`); id.className = 'review-id muted'; heading.append(id);
   const counts = clear('review-counts');
-  const categories: [string, number][] = [['Total lines', next.lines.length], ...(['pending', 'selected', 'needs_revision', 'blocked', 'rejected', 'unchanged'] as ReviewStatus[]).map(state => [decisionLabels[state], next.lines.filter(line => line.status === state && (state !== 'selected' || !isFinished(line))).length] as [string, number])];
+  const categories: [string, number][] = [['Owner comparisons', next.lines.length], ...(['pending', 'selected', 'needs_revision', 'blocked', 'rejected', 'unchanged'] as ReviewStatus[]).map(state => [decisionLabels[state], next.lines.filter(line => line.status === state && (state !== 'selected' || !isFinished(line))).length] as [string, number])];
+  if (next.coverage?.length) categories.push(['Coverage notes', next.coverage.length], ['Total reviewed records', next.lines.length + next.coverage.length]);
   for (const [label, count] of categories) { const item = element('div'); item.className = 'review-count'; item.append(element('strong', String(count)), element('span', label)); counts.append(item); }
   const executionCounts = new Map<string, number>();
   for (const line of next.lines) if (line.execution) executionCounts.set(line.execution.status, (executionCounts.get(line.execution.status) ?? 0) + 1);
@@ -349,6 +410,22 @@ function renderReview(result: any, preservePrepared = false) {
   const unresolved = next.lines.filter(line => ['pending', 'needs_revision', 'blocked'].includes(line.status) && !isFinished(line)).length;
   const progress = el('review-progress'); progress.className = `review-progress${unresolved ? ' review-missing-decision' : ''}`;
   progress.textContent = unresolved ? `${unresolved} line${unresolved === 1 ? '' : 's'} still need${unresolved === 1 ? 's' : ''} a decision or correction. Counts include every line, even when filtered.` : next.lines.every(line => ['verified', 'unchanged'].includes(line.execution?.status ?? line.status) || line.status === 'rejected') ? 'Every line is verified, unchanged, or rejected.' : 'Every line has a review decision. Check execution statuses for queued updates, validation, or exceptions.';
+  if (!next.lines.length) progress.textContent = 'No cost comparisons are proposed. Review the coverage notes below; none can be submitted as a price change.';
+  else if (next.coverage?.length) progress.textContent += ` ${next.coverage.length} separate coverage notes remain visible below.`;
+  renderCoverage();
+  const learningPanel = clear('review-learning');
+  const learning = (next.learning_proposals ?? []).filter((proposal: any) => proposal.learning?.status === 'proposal_only');
+  learningPanel.hidden = !learning.length;
+  if (learning.length) {
+    const count = learning.reduce((total: number, proposal: any) => total + (proposal.learning.candidates?.length ?? 0), 0);
+    const disclosure = element('details'); disclosure.append(element('summary', `Proposed learning (${count} candidate${count === 1 ? '' : 's'} · not saved)`));
+    const explanation = element('p', 'These definitions and associations are drafts for separate review. Selecting a price change does not save them.'); explanation.className = 'muted'; disclosure.append(explanation);
+    for (const proposal of learning) {
+      if (proposal.learning.truncated) notice(disclosure, 'This plan has more learning candidates than the saved preview contains. Review the source before saving any definitions.');
+      details(disclosure, `Plan ${proposal.plan_id}`, proposal.learning.candidates ?? []);
+    }
+    learningPanel.append(disclosure);
+  }
   const batchPanel = clear('review-batch-status'), latest = next.batches?.at(-1);
   if (latest) {
     batchPanel.append(element('p', `Latest batch: ${latest.state.replaceAll('_', ' ')}`));
@@ -379,12 +456,12 @@ function renderReview(result: any, preservePrepared = false) {
 }
 function renderReviewLines() {
   const target = clear('review-lines'), visible = visibleReviewLines();
-  if (!visible.length) { const empty = element('p', 'No lines match this filter. The totals above still include all review lines.'); empty.className = 'empty-review'; target.append(empty); updateReviewSelection(); return; }
-  const summary = element('p', `Showing ${visible.length} of ${review!.lines.length} lines`); summary.className = 'metadata muted'; target.append(summary);
+  if (!visible.length) { const empty = element('p', review?.lines.length ? 'No owner comparisons match this filter. The totals and coverage notes above still include every record.' : 'There are no owner cost comparisons in this review.'); empty.className = 'empty-review'; target.append(empty); updateReviewSelection(); return; }
+  const summary = element('p', `Showing ${visible.length} of ${review!.lines.length} owner comparisons. Inherited effects are expandable within each owner.`); summary.className = 'metadata muted'; target.append(summary);
   const wrap = element('div'); wrap.className = 'table-wrap';
   const node = element('table'); node.className = 'review-table';
   const header = element('thead'), headerRow = element('tr');
-  for (const title of ['Select', 'Status', 'Product / attribute', 'Amounts', 'Source / evidence', 'Actions']) { const th = element('th', title); th.setAttribute('scope', 'col'); headerRow.append(th); }
+  for (const title of ['Select', 'Status', 'Cost owner / attribute', 'Amounts', 'Source / evidence', 'Actions']) { const th = element('th', title); th.setAttribute('scope', 'col'); headerRow.append(th); }
   header.append(headerRow); node.append(header);
   const body = element('tbody');
   for (const line of visible) {
@@ -399,6 +476,7 @@ function renderReviewLines() {
     const product = element('td'); product.className = 'line-product'; product.append(element('strong', c.sku ?? `Source row ${(line.provenance?.row_index ?? 0) + 1}`), element('small', c.attribute ?? line.provenance?.rule_id ?? 'Unresolved attribute'));
     if (!reviewPanel && (c.product_id ?? line.provenance?.mapping?.product_id)) product.append(element('small', c.product_id ?? line.provenance?.mapping?.product_id));
     if (c.inheritance_level) product.append(element('small', `Owner: ${inheritanceLevel(c.inheritance_level)}`));
+    for (const value of sourceSelection(line)) { const evidence = element('small', value); evidence.className = 'source-selection'; product.append(evidence); }
     if (c.family_id && !reviewPanel) product.append(element('small', `Family: ${c.family_id}`));
     if (c.material_group) { product.append(element('small', `Material group: ${c.material_group.identifier}`)); details(product, 'Supplier and raw-stock group', c.material_group); }
     if (line.instruction) { const instruction = element('p', line.instruction); instruction.className = 'line-instruction'; product.append(element('small', 'Instruction'), instruction); }
@@ -425,7 +503,7 @@ function renderReviewLines() {
     if (c.review_evidence) details(source, 'Attribute evidence', c.review_evidence);
     if (c.descendant_impact?.length) {
       const d = element('details'); d.className = 'line-evidence'; d.append(element('summary', `${c.descendant_impact.length} descendant${c.descendant_impact.length === 1 ? '' : 's'} · ${c.descendant_impact.filter((child: any) => child.overridden).length} overrides preserved`));
-      table(d, ['SKU', verified ? 'Previous' : 'Current', verified ? 'Verified' : 'Proposed', 'Override'], c.descendant_impact.map((child: any) => [child.sku || child.product_id, amount(child.old_value, c.currency), amount(child.new_value, c.currency), child.overridden ? 'Preserved' : 'Inherits update'])); source.append(d);
+      table(d, ['SKU', verified ? 'Previous' : 'Current', verified ? 'Verified' : 'Proposed', 'Override'], c.descendant_impact.map((child: any) => [child.sku || child.product_id, amount(child.old_value, c.currency), amount(child.new_value, c.currency), child.overridden ? 'Preserved' : 'Inherits update'])); product.append(d);
     }
     if (reviewPanel) { const evidence = element('details'), content = element('div'); for (const child of Array.from(source.childNodes)) content.append(child.cloneNode(true)); evidence.append(element('summary', 'Source and evidence'), content); product.append(evidence); }
     row.append(source);

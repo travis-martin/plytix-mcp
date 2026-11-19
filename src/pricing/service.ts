@@ -3,12 +3,12 @@ import { z } from 'zod';
 import type { PlytixClient } from '../client.js';
 import { PlytixError, type PlytixProduct, type PlytixResult } from '../types.js';
 import { createPricingStore, type PricingStore } from './store.js';
-import { applyInput, changeSchema, importInput, planInput, PRICING_LIMITS, ruleSchema, rulesDocument, rulesInput, sourceRow, type PricingChange, type PricingRule, type SourceRow } from './model.js';
+import { applyInput, changeSchema, importInput, learningMode, planInput, PRICING_LIMITS, ruleSchema, rulesDocument, rulesInput, sourceRow, type LearningMode, type PricingChange, type PricingRule, type SourceRow } from './model.js';
 import { assertReusableCostRules, calculate, calculateWithTrace, calculationAttributes, parseCsv, sameFullItemBasis, withinChangeLimit } from './calculate.js';
 import { appendRecordProvenance, assertRecordProvenance, provenanceAuthority } from './provenance.js';
 import { reviewBinding, reviewDocument } from './review-model.js';
 import { PricingMemory } from './memory.js';
-import { learnImport, learnPlan } from './learning.js';
+import { learnImport, learnPlan, learningProposal, proposeRuleLearning } from './learning.js';
 import { applicableInstructions, evaluatePricingExclusions, guidanceDigest, guidanceInstruction, hasActiveGuidance, readGuidance, type GuidanceDocument } from './guidance.js';
 import { materialGroup, PricingSnapshot, stockLabels } from './snapshot.js';
 
@@ -19,13 +19,14 @@ function canonical(value: unknown): string {
 }
 export const digest = (value: unknown) => createHash('sha256').update(canonical(value)).digest('hex');
 function fail(message: string): never { throw new PlytixError(message); }
-const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), source_context: importInput.shape.source_context, rows: z.array(sourceRow).max(PRICING_LIMITS.import_rows), created_at: z.string() });
+const docSchema = z.object({ id: z.string().uuid(), source_name: z.string(), source_sha256: z.string(), extraction_sha256: z.string(), sku_column: z.string(), source_context: importInput.shape.source_context, learning_mode: learningMode.optional(), rows: z.array(sourceRow).max(PRICING_LIMITS.import_rows), created_at: z.string(), learning_proposal: learningProposal.optional() });
 const guidanceBinding = z.object({ revision: z.number().int().nonnegative(), digest: z.string().regex(/^[a-f0-9]{64}$/), instructions: z.array(guidanceInstruction).max(100) }).strict();
 export const storedPlan = z.object({
   plan_id: z.string().uuid(), digest: z.string(), created_at: z.string(), expires_at: z.string(),
   import_id: z.string().uuid(), rules_revision: z.number(), input: planInput,
   rules_digest: z.string(), source_digest: z.string(), rule_snapshot: z.array(ruleSchema),
   source_snapshot: docSchema,
+  learning_proposal: learningProposal.optional(),
   guidance_binding: guidanceBinding.optional(),
   review_binding: reviewBinding.optional(),
   execution_batch_id: z.string().uuid().optional(),
@@ -86,10 +87,12 @@ export class PricingService {
   }
   private async readRules(directory: PricingStore) { return this.parseRules(await directory.read('rules.json')); }
   private async put(directory: PricingStore, id: string, value: unknown) { await directory.create(`${id}.json`, value); }
-  async rulesGet() {
+  async rulesGet(mode: LearningMode = 'automatic') {
+    mode = learningMode.parse(mode);
     const directory = await this.directory();
     const rules = await this.readRules(directory);
-    const learning = rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
+    const learning = mode === 'proposal_only' ? proposeRuleLearning(rules.rules, rules.revision)
+      : rules.revision ? await this.learnSafely(() => new PricingMemory(directory).recordRules(rules.rules, rules.revision)) : { status: 'empty' };
     return { ...rules, learning, storage: directory.kind, storage_backend: directory.kind, storage_scope: directory.scope ?? null, provenance_authority: provenanceAuthority,
       sharing: `${directory.scope?.guidance ?? 'Pricing files are private to this credential pair.'} Rules never authorize writes.` };
   }
@@ -127,8 +130,12 @@ export class PricingService {
     if (learning.status === 'unavailable') warnings.push('Rules were saved, but their advisory dictionary index could not be updated.');
     return { ...next, learning, provenance_authority: provenanceAuthority, ...(warnings.length ? { partial: true, warning: warnings.join(' ') } : {}) };
   }
-  private async learnSafely(work: () => Promise<object>) {
-    try { return { status: 'stored' as const, ...await work() }; }
+  private async learnSafely(work: () => Promise<object>): Promise<z.infer<typeof learningProposal> | { status: 'stored'; [key: string]: unknown } | { status: 'unavailable'; warning: string }> {
+    try {
+      const result = await work();
+      if ('status' in result && result.status === 'proposal_only') return learningProposal.parse(result);
+      return { status: 'stored' as const, ...result };
+    }
     catch { return { status: 'unavailable' as const, warning: 'Advisory dictionary learning could not be saved; use current Plytix and reviewed rules.' }; }
   }
   async importDocument(input: z.infer<typeof importInput>) {
@@ -178,12 +185,14 @@ export class PricingService {
       try { family.name = (await this.client.getFamily(family.family_id)).data[0]?.name ?? null; }
       catch { /* A suggested ID is evidence; unavailable family name is explicitly null. */ }
     }
-    const document = { id: randomUUID(), source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: digest(rows), sku_column: input.sku_column, ...(input.source_context ? { source_context: input.source_context } : {}), rows, created_at: new Date().toISOString() };
-    await this.put(directory, document.id, document);
+    const mode: LearningMode = input.learning_mode ?? 'automatic';
+    const document = { id: randomUUID(), source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: digest(rows), sku_column: input.sku_column, ...(input.source_context ? { source_context: input.source_context } : {}), learning_mode: mode, rows, created_at: new Date().toISOString() };
+    if (mode === 'automatic') await this.put(directory, document.id, document);
     const learning = await this.learnSafely(() => learnImport(new PricingMemory(directory), {
       ...document, columns: [...new Set(rows.flatMap(row => Object.keys(row.values)))], family_suggestions: complete ? [...families.values()] : [],
     }));
-    return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, family_suggestions: [...families.values()], matches, lookup: { complete, pages, unique_skus: skus.length }, learning, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. Incomplete lookups do not establish unique matches. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
+    if (mode === 'proposal_only') await this.put(directory, document.id, { ...document, ...(learning.status === 'proposal_only' ? { learning_proposal: learning } : {}) });
+    return { import_id: document.id, source_name: input.source_name, source_sha256: input.source_sha256, extraction_sha256: document.extraction_sha256, learning_mode: document.learning_mode, family_suggestions: [...families.values()], matches, lookup: { complete, pages, unique_skus: skus.length }, learning, next: 'Review family suggestions and choose explicit row/product/family mappings before pricing_plan. Incomplete lookups do not establish unique matches. The source hash is supplied by the document reader; extraction hash is computed by this server.' };
   }
   private async inspect(row: SourceRow, skuColumn: string, mapping: z.infer<typeof planInput>['mappings'][number], rule: PricingRule, guidance: GuidanceDocument, snapshot?: PricingSnapshot): Promise<PricingChange> {
     if ((rule.effective_from && Date.now() < Date.parse(rule.effective_from)) || (rule.effective_until && Date.now() > Date.parse(rule.effective_until))) fail('Pricing rule is outside its reviewed effective time window');
@@ -344,12 +353,15 @@ export class PricingService {
   }
   async plan(input: z.input<typeof planInput>, binding?: z.infer<typeof reviewBinding>, options: { store?: PricingStore; persist?: boolean; snapshot?: PricingSnapshot } = {}) {
     const directory = options.store ?? await this.directory();
-    const parsed = planInput.parse(input);
+    let parsed = planInput.parse(input);
     const built = await this.build(parsed, directory, undefined, options.snapshot);
+    parsed = { ...parsed, learning_mode: parsed.learning_mode ?? built.source_snapshot.learning_mode ?? 'automatic' };
     const plan: StoredPlan = { plan_id: randomUUID(), digest: digest({ input: parsed, ...built }), created_at: new Date().toISOString(), expires_at: new Date(Date.now() + 30 * 60_000).toISOString(), import_id: parsed.import_id, input: parsed, ...built, ...(binding ? { review_binding: reviewBinding.parse(binding) } : {}), state: 'draft', results: [] };
-    if (options.persist !== false) await this.put(directory, plan.plan_id, plan);
+    if (options.persist !== false && parsed.learning_mode === 'automatic') await this.put(directory, plan.plan_id, plan);
     // Grouped review previews also refresh advisory setup once per group.
-    const learning = await this.learnSafely(() => learnPlan(new PricingMemory(directory), { ...plan.source_snapshot, changes: plan.changes, rules: plan.rule_snapshot }));
+    const learning = await this.learnSafely(() => learnPlan(new PricingMemory(directory), { ...plan.source_snapshot, learning_mode: parsed.learning_mode, changes: plan.changes, rules: plan.rule_snapshot }));
+    if (learning.status === 'proposal_only') plan.learning_proposal = learning;
+    if (options.persist !== false && parsed.learning_mode === 'proposal_only') await this.put(directory, plan.plan_id, plan);
     return { ...plan, learning };
   }
   /** Split a freshly calculated internal snapshot without rereading the same
@@ -362,6 +374,10 @@ export class PricingService {
     const built = { changes: source.changes.filter(included), blocked: source.blocked.filter(included), rules_revision: source.rules_revision, rules_digest: source.rules_digest, source_digest: source.source_digest, rule_snapshot: source.rule_snapshot, source_snapshot: source.source_snapshot,
       ...(source.guidance_binding ? { guidance_binding: { ...source.guidance_binding, instructions: source.guidance_binding.instructions.filter(instruction => !instruction.scope.family_ids.length || mappings.some(mapping => instruction.scope.family_ids.includes(mapping.family_id))) } } : {}) };
     const plan = storedPlan.parse({ ...source, ...built, plan_id: randomUUID(), input, review_binding: binding, digest: digest({ input, ...built }) });
+    // A split review must not suggest setup from mappings outside its subset.
+    if (input.learning_mode === 'proposal_only') plan.learning_proposal = learningProposal.parse(await learnPlan(new PricingMemory(directory), {
+      ...plan.source_snapshot, learning_mode: 'proposal_only', changes: plan.changes, rules: plan.rule_snapshot,
+    }));
     await this.put(directory, plan.plan_id, plan);
     return plan;
   }

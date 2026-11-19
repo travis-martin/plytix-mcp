@@ -44,7 +44,10 @@ Organization name is an operator-supplied label, not proof of membership. The
 export requires matching organization workspace IDs and storage backends.
 
 1. Read `pricing_rules_get` first. This tool can refresh advisory rule-derived
-   dictionary records; it does not change prices or approve rules.
+   dictionary records; it does not change prices or approve rules. Use
+   `learning_mode: "proposal_only"` when the capture must not update the
+   dictionary. Returned candidates are not canonical records and are not part
+   of the export's dictionary pages.
 2. Read `pricing_guidance_get` without filters and with `include_retired: true`.
 3. Read `pricing_dictionary_get` without query/scope filters, with
    `include_retired: true`, `page_size: 100`, starting at page 1. Follow every page
@@ -123,6 +126,16 @@ predecessor checksum/revisions and a record diff, without overwriting the old
 files. Changes in read timestamps alone do not count as new knowledge. Refresh
 after successful reviewed imports or corrections; no scheduler or automatic
 cloud-to-local synchronization is implied.
+
+For example, after a supplier review the owner may approve one tier-selection
+instruction, a supplier alias, and a dimension-aware item-price rule. Save each
+approved change through its appropriate tool with fresh revisions and review
+sources; read back all three results. Collect a full new capture, using
+proposal-only rule reads if no additional automatic learning is authorized, then
+run the refresh command with the earlier JSON export as `--previous`. The new
+Markdown explains the resulting canonical rules and retains predecessor lineage.
+Unapproved candidates and dated prices stay in the private review, not the
+canonical export. Editing an old Markdown copy does not update either store.
 
 ## Review an imported edit
 
