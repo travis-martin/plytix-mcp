@@ -46,6 +46,7 @@ try {
     cwd: root, env: environment, stderr: 'pipe',
   });
   await client.connect(transport);
+  assert.equal(client.getServerVersion()?.version, version, 'Server handshake version must match the packaged release');
   const tools = (await client.listTools()).tools;
   assert.deepEqual(new Set(tools.map(tool => tool.name)), DEFAULT_TOOLS);
   assert(tools.every(tool => tool.annotations?.readOnlyHint === READ_TOOLS.has(tool.name)));

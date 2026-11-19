@@ -24,6 +24,11 @@ knowledge has its own committed revision archive and private export lineage.
 - Pricing guidance documents source category, precision, independent size lists,
   table-specific units and owner-only audit limits.
 
+### Fixed
+
+- Server and workspace release labels match the package version; the isolated
+  plugin check now verifies the server handshake version before activation.
+
 Change-Id: change-20261118-chemcast-knowledge-history
 Reason: Make pricing audits proposal-only and retain consistent evidence for knowledge changes and rollback.
 Sources: approved knowledge maintenance and history request; docs/change-history.md
